@@ -172,3 +172,94 @@ def test_weighting_is_stable_ordering():
     apply_need_weights(avail, needs, SLOTS)
     ordered = sorted(avail, key=lambda p: (p["adj_rank"], p["my_rank"]))
     assert [p["name"] for p in ordered] == ["a", "b"]
+
+
+# --- scarcity -------------------------------------------------------------
+
+def TP(name, pos, rank, tier, adp):
+    return {"name": name, "pos": pos, "my_rank": rank,
+            "pos_tier": tier, "espn_live_adp": adp}
+
+
+def test_p_taken_is_a_coin_flip_at_adp():
+    from draft import p_taken_by
+    assert abs(p_taken_by(50, 50) - 0.5) < 1e-9
+    assert p_taken_by(50, 80) > 0.95      # long past his ADP
+    assert p_taken_by(50, 20) < 0.05      # well before it
+    assert p_taken_by(None, 50) == 0.0
+
+
+def test_horizon_is_the_pick_after_next():
+    from draft import horizon_pick
+    # slot 1 of 10 picks 1, 20, 21, 40...
+    assert horizon_pick(1, 10, 16, picks_made=0) == 20   # on clock at 1, next is 20
+    assert horizon_pick(1, 10, 16, picks_made=19) == 21  # on clock at 20, next is 21
+    assert horizon_pick(1, 10, 16, picks_made=20) == 40  # on clock at 21, next is 40
+    assert horizon_pick(None, 10, 16, 0) is None
+
+
+def test_back_to_back_picks_kill_urgency():
+    """Slot 1 holds 20 and 21. Almost nothing can happen between them."""
+    from draft import tier_scarcity, horizon_pick
+    tier = [TP(f"rb{i}", "RB", 30 + i, 3, 34.0) for i in range(2)]
+    nxt = [TP(f"rb{i}", "RB", 60 + i, 4, 70.0) for i in range(3)]
+
+    at20 = horizon_pick(1, 10, 16, picks_made=19)   # -> 21, one pick away
+    at21 = horizon_pick(1, 10, 16, picks_made=20)   # -> 40, nineteen away
+    near = tier_scarcity(tier + nxt, at20)[("RB", 3)]
+    far = tier_scarcity(tier + nxt, at21)[("RB", 3)]
+    assert near["bonus"] < far["bonus"]
+    assert near["bonus"] < 1.0, "back-to-back turns should carry ~no urgency"
+
+
+def test_thin_tier_beats_deep_tier():
+    from draft import tier_scarcity
+    thin = [TP("te1", "TE", 20, 1, 25.0)]
+    thin_next = [TP("te2", "TE", 60, 2, 65.0)]
+    deep = [TP(f"wr{i}", "WR", 20 + i, 1, 25.0) for i in range(6)]
+    deep_next = [TP("wrx", "WR", 60, 2, 65.0)]
+    s = tier_scarcity(thin + thin_next + deep + deep_next, 45)
+    assert s[("TE", 1)]["p_gone"] > s[("WR", 1)]["p_gone"]
+    assert s[("TE", 1)]["bonus"] > s[("WR", 1)]["bonus"]
+
+
+def test_bonus_scales_with_the_cliff():
+    """Same survival odds, bigger drop to the next tier => more urgency."""
+    from draft import tier_scarcity
+    small = [TP("a", "RB", 10, 1, 12.0), TP("b", "RB", 14, 2, 40.0)]
+    big = [TP("a", "WR", 10, 1, 12.0), TP("b", "WR", 60, 2, 40.0)]
+    s = tier_scarcity(small + big, 40)
+    assert s[("WR", 1)]["cliff"] > s[("RB", 1)]["cliff"]
+    assert s[("WR", 1)]["bonus"] > s[("RB", 1)]["bonus"]
+
+
+def test_scarcity_is_capped_and_never_negative():
+    from draft import tier_scarcity, SCARCITY_CAP
+    cliffy = [TP("a", "TE", 5, 1, 6.0), TP("b", "TE", 400, 2, 300.0)]
+    s = tier_scarcity(cliffy, 200)[("TE", 1)]
+    assert 0 <= s["bonus"] <= SCARCITY_CAP
+
+
+def test_scarcity_can_outrank_a_flex_penalty_but_not_invert_reality():
+    """A vanishing tier should be able to jump a mild flex discount."""
+    from draft import apply_need_weights, tier_scarcity
+    mine = [P("rb1", "RB", 1), P("rb2", "RB", 2)]
+    needs = roster_needs(mine, SLOTS)
+    avail = [TP("scarce_rb", "RB", 40, 3, 42.0),
+             TP("next_rb", "RB", 90, 4, 95.0),
+             TP("plain_te", "TE", 38, 2, 120.0),
+             TP("te_next", "TE", 50, 3, 130.0)]
+    sc = tier_scarcity(avail, 60)
+    apply_need_weights(avail, needs, SLOTS, sc)
+    rb = next(p for p in avail if p["name"] == "scarce_rb")
+    te = next(p for p in avail if p["name"] == "plain_te")
+    assert rb["scarcity"] > te["scarcity"]
+    assert rb["adj_rank"] < rb["my_rank"] + rb["need_penalty"]
+
+
+def test_no_horizon_means_no_scarcity():
+    from draft import apply_need_weights
+    avail = [TP("a", "RB", 10, 1, 12.0)]
+    apply_need_weights(avail, roster_needs([], SLOTS), SLOTS, {})
+    assert avail[0]["scarcity"] == 0
+    assert avail[0]["adj_rank"] == 10

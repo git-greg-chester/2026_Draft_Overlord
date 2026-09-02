@@ -92,10 +92,21 @@ setTimeout(() => {
   console.log('first QB row     : weighted', qbWeighted, '/ board', qbBoard);
   d.getElementById('mode').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
 
+  // Scarcity: a vanishing tier must surface both as a chip and on the row,
+  // and must disappear entirely in raw Board order.
+  const scarceBadges = d.querySelectorAll('.tag.sc').length;
+  const scarceChips = d.querySelectorAll('.chip.scarce').length;
+  d.getElementById('mode').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const scarceInBoard = d.querySelectorAll('.tag.sc').length;
+  d.getElementById('mode').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  console.log('scarcity         : badges', scarceBadges, '| chips', scarceChips,
+              '| in board mode', scarceInBoard);
+
   const ok = rows.length > 0
     && bandedWeighted === 0 && bandedBoard > 0
     && qbWeighted >= qbBoard          // weighting never promotes a covered position
     && feed.length > 0
+    && scarceBadges > 0 && scarceChips > 0 && scarceInBoard === 0
     && errors.length === 0;
   console.log(ok ? '\nPASS' : '\nFAIL');
   process.exit(ok ? 0 : 1);

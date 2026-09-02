@@ -156,8 +156,30 @@ Tests: `python3 -m pytest -q` (21) and `npm test` (jsdom UI render).
 - **+n** (green) — your `DELTA`: ESPN ranks him this many picks *later* than you
   do, so the room should let him fall. These are the value targets.
 - **adp** — ESPN live ADP.
-- Header chips show unfilled starting slots and **tier cliffs** (≤2 left in the
-  best available tier at a position).
+- **`starter` / `flex` / `depth`** — need weighting. Once a position is covered
+  it gets pushed down but never removed (see `PENALTY_*` in `draft.py`).
+- **`scarce +n`** — tier scarcity. See below.
+
+## How scarcity works
+
+The cost of waiting on a player is: *how likely his tier is gone when I pick
+again* × *how far the drop is to the next tier*. Both are measurable, and the
+product is in ranks, so it just subtracts from the adjusted rank.
+
+- **P(tier gone)** — each member's chance of being taken by the horizon, from a
+  logistic around his ADP (`ADP_SPREAD`), multiplied together.
+- **Cliff** — ranks between the best player in this tier and the best in the
+  next tier at that position.
+- **Horizon** — the pick *after* your next one. The question is "take him now or
+  get one at my next turn", so back-to-back picks (slot 1 holds 20 and 21)
+  carry almost no urgency. That falls out of the model rather than being
+  special-cased.
+
+Tunable in `draft.py`: `SCARCITY_DAMPING`, `SCARCITY_CAP`, `ADP_SPREAD`.
+
+Header chips lead with scarcity (`TE T1 87% gone by #40`), then raw tier
+counts, then open slots. The **Weighted / Board** toggle turns all of this off
+and shows your board exactly as written.
 
 ## Files
 

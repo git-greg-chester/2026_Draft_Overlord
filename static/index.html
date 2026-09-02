@@ -87,6 +87,8 @@
   .tag.starter{color:var(--safe);border-color:#1f4620}
   .tag.flex{color:var(--dim);border-color:var(--line)}
   .tag.depth{color:var(--gone);border-color:#5a2320}
+  .tag.sc{color:var(--accent);border-color:#3d2f7a;background:#1a1533}
+  .chip.scarce{border-color:var(--accent);color:#c3b5ff}
   tr.dep td.nm{opacity:.62}
   .wasrank{color:var(--faint);font-size:10px}
 
@@ -194,10 +196,24 @@ function render(d){
 
   // chips: open slots, then tier cliffs
   const ch=[];
-  const open=(d.needs&&d.needs.open_slots)||{};
-  Object.entries(open).forEach(([s,n])=>ch.push(`<span class="chip need">need ${s}${n>1?" ×"+n:""}</span>`));
-  (d.cliffs||[]).filter(x=>x.cliff).forEach(x=>
+  // Scarcity leads: probability x cliff is sharper than a raw count, and
+  // it's the thing that should change what you do right now.
+  const scarce = (weighted ? (d.scarcity||[]) : []).filter(s=>s.bonus>=3);
+  scarce.slice(0,3).forEach(s => ch.push(
+    `<span class="chip scarce" title="cliff to next tier: ${s.cliff} ranks">`
+    + `${s.pos} T${s.tier} ${Math.round(s.p_gone*100)}% gone by #${d.horizon}</span>`));
+  const covered = new Set(scarce.map(s=>s.pos+"/"+s.tier));
+  (d.cliffs||[]).filter(x=>x.cliff && !covered.has(x.pos+"/"+x.tier)).slice(0,2).forEach(x=>
     ch.push(`<span class="chip cliff">${x.pos} T${x.tier}: ${x.remaining} left</span>`));
+
+  // Early on every slot is open, which makes "need" chips pure noise.
+  // Only surface them once the roster is far enough along to constrain.
+  const open=(d.needs&&d.needs.open_slots)||{};
+  const openList=Object.entries(open);
+  if(openList.length && openList.length<=4)
+    openList.forEach(([s,n])=>ch.push(`<span class="chip need">need ${s}${n>1?" ×"+n:""}</span>`));
+  else if(openList.length)
+    ch.push(`<span class="chip need">${openList.length} slots open</span>`);
   // Bye stacking: wk14 is the last week before playoffs, wk11 has six teams out.
   const byes={};
   (d.mine||[]).forEach(p=>{ if(p.bye) byes[p.bye]=(byes[p.bye]||0)+1; });
@@ -260,8 +276,10 @@ function render(d){
     const dl = p.delta>0 ? ` <span class="dl">+${p.delta}</span>` : "";
     const tag = (weighted && p.need_tag && p.need_tag!=="starter")
       ? ` <span class="tag ${p.need_tag}">${p.need_tag}</span>` : "";
+    const sc = (weighted && p.scarcity>=2)
+      ? ` <span class="tag sc" title="tier ${Math.round(p.p_tier_gone*100)}% likely gone by pick ${d.horizon}">scarce +${Math.round(p.scarcity)}</span>` : "";
     const tierBit = (!banded && t!=null) ? ` · T${t}` : "";
-    nm.innerHTML = `${p.name}${tag}<span class="meta">${p.pos} · ${p.team}`
+    nm.innerHTML = `${p.name}${tag}${sc}<span class="meta">${p.pos} · ${p.team}`
       + (p.bye?` · bye ${p.bye}`:``) + tierBit + `</span>${dl}`
       + (p.flags?`<span class="flag">${p.flags}</span>`:``);
 

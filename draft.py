@@ -20,6 +20,13 @@ PENALTY_FLEX = 12       # fills only FLEX / WR-TE, not a dedicated slot
 PENALTY_DEPTH = 45      # pure bench depth at a position already covered
 PENALTY_SURPLUS = 25    # per extra body beyond the first backup
 
+# Scarcity. The value of a tier rises as it empties, because the real cost of
+# waiting is the drop to the next tier weighted by the chance nothing survives.
+ADP_SPREAD = 9.0        # picks of noise around a player's ADP (logistic scale)
+SCARCITY_DAMPING = 0.6  # trust in the estimate; 1.0 would take it at face value
+SCARCITY_CAP = 35       # never let scarcity alone leap a player more than this
+DEFAULT_CLIFF = 30      # assumed drop when a position has no next tier left
+
 
 def pick_number(round_num: int, slot: int, team_count: int) -> int:
     """1-indexed overall pick for a snake draft."""
@@ -135,18 +142,94 @@ def need_penalty(pos: str, needs: dict, slot_counts: dict[str, int]) -> tuple[in
     return PENALTY_DEPTH + surplus * PENALTY_SURPLUS, "depth"
 
 
+def p_taken_by(adp: float | None, pick_no: int) -> float:
+    """Chance a player is gone by `pick_no`, given his ADP.
+
+    ADP is a mean, not a certainty, so this is a logistic around it rather
+    than a step. A player whose ADP equals the pick is a coin flip.
+    """
+    if adp is None or pick_no is None:
+        return 0.0
+    import math
+    return 1.0 / (1.0 + math.exp(-(pick_no - adp) / ADP_SPREAD))
+
+
+def horizon_pick(my_slot: int | None, team_count: int, rounds: int,
+                 picks_made: int) -> int | None:
+    """The pick by which I must have acted: my turn *after* the next one.
+
+    The decision at any turn is "take him now, or hope he lasts until I pick
+    again". Back-to-back turns (slot 1 gets 20 and 21) therefore carry almost
+    no scarcity urgency, which is correct.
+    """
+    if not my_slot:
+        return None
+    mine = [n for n in my_pick_numbers(my_slot, team_count, rounds) if n > picks_made]
+    if len(mine) >= 2:
+        return mine[1]
+    return mine[0] if mine else None
+
+
+def tier_scarcity(available: list[dict], horizon: int | None) -> dict:
+    """Per (position, tier): how likely it empties, and what the drop costs.
+
+    Returns {(pos, tier): {"p_gone", "cliff", "bonus", "remaining"}}.
+    """
+    if horizon is None:
+        return {}
+
+    by_pos: dict[str, list[dict]] = {}
+    for p in available:
+        by_pos.setdefault(p["pos"], []).append(p)
+
+    out: dict[tuple, dict] = {}
+    for pos, players in by_pos.items():
+        players.sort(key=lambda p: p.get("my_rank", 9999))
+        tiers: dict[int, list[dict]] = {}
+        for p in players:
+            t = p.get("pos_tier")
+            if t is not None:
+                tiers.setdefault(t, []).append(p)
+
+        ordered = sorted(tiers)
+        for i, t in enumerate(ordered):
+            members = tiers[t]
+            # Every member gone => the tier is gone. Independence is a
+            # simplification; runs on a position make it optimistic.
+            p_gone = 1.0
+            for m in members:
+                p_gone *= p_taken_by(effective_adp(m), horizon)
+
+            best_now = members[0].get("my_rank", 9999)
+            nxt = tiers[ordered[i + 1]][0].get("my_rank") if i + 1 < len(ordered) else None
+            cliff = (nxt - best_now) if nxt is not None else DEFAULT_CLIFF
+            cliff = max(0, cliff)
+
+            bonus = min(SCARCITY_CAP, p_gone * cliff * SCARCITY_DAMPING)
+            out[(pos, t)] = {"p_gone": p_gone, "cliff": cliff,
+                             "bonus": bonus, "remaining": len(members)}
+    return out
+
+
 def apply_need_weights(available: list[dict], needs: dict,
-                       slot_counts: dict[str, int]) -> None:
+                       slot_counts: dict[str, int],
+                       scarcity: dict | None = None) -> None:
     """Annotate each available player with a need-adjusted rank, in place."""
     cache: dict[str, tuple[int, str]] = {}
+    scarcity = scarcity or {}
     for p in available:
         pos = p["pos"]
         if pos not in cache:
             cache[pos] = need_penalty(pos, needs, slot_counts)
         penalty, reason = cache[pos]
+        sc = scarcity.get((pos, p.get("pos_tier")), {})
+        bonus = sc.get("bonus", 0.0)
         p["need_penalty"] = penalty
         p["need_tag"] = reason
-        p["adj_rank"] = p.get("my_rank", 9999) + penalty
+        p["scarcity"] = round(bonus, 1)
+        p["p_tier_gone"] = round(sc.get("p_gone", 0.0), 3)
+        # Both terms are in ranks, so they simply add.
+        p["adj_rank"] = round(p.get("my_rank", 9999) + penalty - bonus, 1)
 
 
 def tier_cliffs(available: list[dict]) -> list[dict]:
@@ -212,7 +295,10 @@ def build_view(board: list[dict], drafted: dict[int, int], my_team_id: int,
 
     slot_counts = state.slot_counts if state else {}
     needs = roster_needs(mine, slot_counts)
-    apply_need_weights(available, needs, slot_counts)
+    horizon = horizon_pick(my_slot, state.team_count if state else 10,
+                           rounds, picks_made)
+    scarcity = tier_scarcity(available, horizon)
+    apply_need_weights(available, needs, slot_counts, scarcity)
     return {
         # Each player carries adj_rank; the client sorts, so the payload
         # doesn't ship the same 193 players twice on every pick.
@@ -227,4 +313,10 @@ def build_view(board: list[dict], drafted: dict[int, int], my_team_id: int,
         "targets": value_targets(available, nxt),
         "teams": state.teams if state else {},
         "rounds": rounds,
+        "horizon": horizon,
+        "scarcity": [
+            {"pos": pos, "tier": t, **v}
+            for (pos, t), v in sorted(scarcity.items(), key=lambda kv: -kv[1]["bonus"])
+            if v["bonus"] >= 1
+        ][:6],
     }
