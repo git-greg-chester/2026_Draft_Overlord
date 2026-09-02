@@ -90,3 +90,32 @@ def test_cliff_detection():
     assert cliffs["RB"]["remaining"] == 6 and cliffs["RB"]["cliff"] is False
     # cliffs sort first
     assert tier_cliffs(avail)[0]["pos"] == "TE"
+
+
+def test_transports_merge_without_clobbering():
+    """Sunday runs polling and the draft-room scraper at once.
+
+    An empty or lagging API must never erase scraped picks, and a working
+    API must win where the two disagree about who took a player.
+    """
+    import server
+
+    S = server.State()
+    S.board = [{"espn_id": i, "name": f"p{i}", "pos": "RB", "my_rank": i} for i in (1, 2, 3)]
+
+    # Scraper is ahead, API has nothing yet -> scraped survives.
+    S.scraped = {1: 0, 2: 0}
+    S.api = {}
+    assert S.drafted() == {1: 0, 2: 0}
+
+    # API catches up and knows the actual team -> API wins on overlap.
+    S.api = {1: 7}
+    assert S.drafted() == {1: 7, 2: 0}
+
+    # Manual cross-off fills a gap neither transport has.
+    S.manual = {3: 0}
+    assert S.drafted() == {3: 0, 1: 7, 2: 0}
+
+    # API briefly returning nothing must not wipe the board mid-draft.
+    S.api = {}
+    assert S.drafted() == {3: 0, 1: 0, 2: 0}

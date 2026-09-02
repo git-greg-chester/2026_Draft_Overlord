@@ -18,8 +18,17 @@ python3 -m uvicorn server:app --port 8777
 ```
 
 Open <http://127.0.0.1:8777> and tile it beside the ESPN draft room.
-Set your **slot** in the header dropdown as soon as the draft order is posted —
-the survival column is meaningless without it.
+Then paste snippet **A** from `draft_room_snippets.js` into the draft room
+console (set `MY_TEAM` first).
+
+**Run both transports.** Polling and the draft-room scraper feed the same
+board and merge safely — a lagging or empty API can never erase scraped
+picks, and the API wins where the two disagree. Whichever works on the
+night, the board is correct, and clicking rows by hand always works on top
+of both. Covered by `test_transports_merge_without_clobbering`.
+
+Draft slot is auto-derived from ESPN's pick order. Override it in the header
+dropdown if the order changes.
 
 - **Click a row** → cross that player off (someone else took him).
 - **Click `+`** → add him to *your* roster.
