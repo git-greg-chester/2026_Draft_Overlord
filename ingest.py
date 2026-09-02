@@ -47,9 +47,12 @@ def normalize(name: str) -> str:
     return " ".join(tokens)
 
 
-def fetch_universe(season: int, cache: Path) -> list[dict]:
-    """ESPN's full player pool. Public -- no cookies needed."""
-    if cache.exists():
+def fetch_universe(season: int, cache: Path, refresh: bool = False) -> list[dict]:
+    """ESPN's full player pool. Public -- no cookies needed.
+
+    ESPN re-ranks daily, so --refresh matters in the days before the draft.
+    """
+    if cache.exists() and not refresh:
         return json.loads(cache.read_text())["players"]
     r = requests.get(
         UNIVERSE_URL.format(season=season),
@@ -159,9 +162,11 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=Path("board.json"))
     ap.add_argument("--unmatched", type=Path, default=Path("unmatched.csv"))
     ap.add_argument("--cache", type=Path, default=Path("universe.json"))
+    ap.add_argument("--refresh", action="store_true",
+                    help="re-pull ESPN ranks/ADP instead of using the cache")
     args = ap.parse_args()
 
-    players = fetch_universe(args.season, args.cache)
+    players = fetch_universe(args.season, args.cache, args.refresh)
     proteams = fetch_proteams(args.season)
     index = build_index(players, proteams)
     by_pos: dict[str, list[dict]] = {}
