@@ -79,6 +79,11 @@ class State:
         self.api: dict[int, int] = {}
         self.scraped: dict[int, int] = {}    # pushed from the ESPN draft room
         self.by_norm: dict[str, dict] = {}   # normalized name -> board row
+        self.by_id: dict[int, dict] = {}     # espn_id -> board row
+        self.api_order: list[int] = []       # espn_ids, draft order, from API
+        self.scrape_order: list[int] = []    # espn_ids, draft order, scraped
+        self.scrape_prev: list[str] = []     # last raw scrape, to infer direction
+        self.scrape_newest_first: bool | None = None  # learned, then sticky
         self.history: list[int] = []          # manual picks, for undo
         self.version = 0
         self.conn = {"status": "offline", "detail": "polling not started", "at": None}
@@ -99,10 +104,36 @@ class State:
         # API is authoritative when it has anything; scraped beats manual.
         return {**self.manual, **self.scraped, **self.api}
 
+    def recent(self, limit: int = 14) -> list[dict]:
+        """Most recent picks first, so freshness is verifiable at a glance.
+
+        The API is preferred because it carries real pick numbers and team
+        ids; the scraper only knows order.
+        """
+        order = self.api_order or self.scrape_order or list(self.history)
+        drafted = self.drafted()
+        out = []
+        total = len(order)
+        for i, espn_id in enumerate(reversed(order[-limit:])):
+            row = self.by_id.get(espn_id)
+            if row is None:
+                continue
+            team_id = drafted.get(espn_id, UNKNOWN_TEAM)
+            out.append({
+                "pick": total - i,
+                "name": row["name"],
+                "pos": row["pos"],
+                "team": row["team"],
+                "mine": team_id == self.my_team_id,
+                "by": self.state.teams.get(team_id) if team_id > 0 else None,
+            })
+        return out
+
     def view(self) -> dict:
         d = self.drafted()
         team_id = self.my_team_id
         v = draft.build_view(self.board, d, team_id, self.state, self.my_slot)
+        v["recent"] = self.recent()
         v["connection"] = self.conn
         v["version"] = self.version
         v["league"] = {
@@ -116,6 +147,24 @@ class State:
 
 
 S = State()
+
+
+def oldest_first(ids: list[int], raw: list[str]) -> list[int]:
+    """Return scraped picks in draft order.
+
+    ESPN's pick list may render newest-first or oldest-first and we can't know
+    which from a single sample. Watching where new entries appear settles it:
+    if the previous scrape is a *suffix* of this one, new picks arrived at the
+    head, so the list is newest-first. The answer is sticky once learned.
+    """
+    prev = S.scrape_prev
+    if S.scrape_newest_first is None and prev and len(raw) > len(prev):
+        if raw[-len(prev):] == prev:
+            S.scrape_newest_first = True
+        elif raw[:len(prev)] == prev:
+            S.scrape_newest_first = False
+    S.scrape_prev = list(raw)
+    return list(reversed(ids)) if S.scrape_newest_first else ids
 
 
 def load_board() -> list[dict]:
@@ -136,6 +185,11 @@ def poll_loop():
             client = EspnClient(S.cfg)
             state = client.fetch_draft()
             with S.lock:
+                # Re-check under the lock: a replay may have started while
+                # this fetch was in flight, and a stale result must not
+                # overwrite it.
+                if S.replay_mode:
+                    continue
                 api = {
                     p["espn_id"]: p["team_id"]
                     for p in state.picks
@@ -143,6 +197,7 @@ def poll_loop():
                 }
                 changed = api != S.api
                 S.api = api
+                S.api_order = [p["espn_id"] for p in state.picks]
                 S.state = state
                 if S.my_slot is None and S.cfg and S.cfg.team_id:
                     S.my_slot = (S.cfg.draft_slot
@@ -174,6 +229,7 @@ def poll_loop():
 def startup():
     S.board = load_board()
     S.by_norm = {normalize(b["name"]): b for b in S.board}
+    S.by_id = {b["espn_id"]: b for b in S.board}
     try:
         S.cfg = Config.load()
         S.my_slot = S.cfg.draft_slot
@@ -272,6 +328,7 @@ def scrape(s: ScrapeIn):
         mine_norm = {normalize(n) for n in s.mine}
         found: dict[int, int] = {}
         unmatched: list[str] = []
+        ordered: list[int] = []
         for raw in s.names:
             row = S.by_norm.get(normalize(raw))
             if row is None:
@@ -279,12 +336,16 @@ def scrape(s: ScrapeIn):
                 continue
             found[row["espn_id"]] = (S.my_team_id if normalize(raw) in mine_norm
                                      else UNKNOWN_TEAM)
+            ordered.append(row["espn_id"])
+
+        S.scrape_order = oldest_first(ordered, s.names)
         if found != S.scraped:
             S.scraped = found
             S.conn = {"status": "live", "detail": f"draft room: {len(found)} picks",
                       "at": time.time()}
             S.bump()
-        return {"ok": True, "matched": len(found), "unmatched": unmatched}
+        return {"ok": True, "matched": len(found), "unmatched": unmatched,
+                "newest_first": S.scrape_newest_first}
 
 
 class ReplayIn(BaseModel):
@@ -297,8 +358,10 @@ class ReplayIn(BaseModel):
 def replay(r: ReplayIn):
     with S.lock:
         S.replay_mode = True
-        S.api = {p["espn_id"]: p["team_id"] for p in r.picks
-                 if p.get("espn_id") and p.get("team_id") and p["espn_id"] > 0}
+        good = [p for p in r.picks
+                if p.get("espn_id") and p.get("team_id") and p["espn_id"] > 0]
+        S.api = {p["espn_id"]: p["team_id"] for p in good}
+        S.api_order = [p["espn_id"] for p in good]
         if r.my_team_id is not None:
             if S.cfg is None:
                 S.cfg = Config(team_id=r.my_team_id)

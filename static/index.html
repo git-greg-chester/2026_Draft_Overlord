@@ -80,6 +80,40 @@
   .empty{padding:24px 10px;color:var(--faint);text-align:center}
   footer{padding:8px 10px;color:var(--faint);font-size:11px;
          border-top:1px solid var(--line)}
+
+  /* need weighting */
+  .tag{font-size:9px;padding:1px 4px;border-radius:3px;margin-left:5px;
+       border:1px solid;vertical-align:middle}
+  .tag.starter{color:var(--safe);border-color:#1f4620}
+  .tag.flex{color:var(--dim);border-color:var(--line)}
+  .tag.depth{color:var(--gone);border-color:#5a2320}
+  tr.dep td.nm{opacity:.62}
+  .wasrank{color:var(--faint);font-size:10px}
+
+  /* two-column shell: board + recent picks */
+  .shell{display:grid;grid-template-columns:1fr 186px;align-items:start}
+  .feed{position:sticky;top:0;border-left:1px solid var(--line);
+        background:var(--panel);min-height:100vh}
+  .feed h3{margin:0;padding:7px 9px;font-size:10px;letter-spacing:.06em;
+           text-transform:uppercase;color:var(--dim);
+           border-bottom:1px solid var(--line);display:flex;
+           justify-content:space-between;align-items:center}
+  .age{font-weight:400;text-transform:none;letter-spacing:0}
+  .age.stale{color:var(--coin)}
+  .age.dead{color:var(--gone)}
+  .fp{padding:4px 9px;border-bottom:1px solid #1b2027;font-size:11px;
+      animation:flash .9s ease-out}
+  .fp.me{background:#10243d}
+  .fp .n{display:block;color:var(--tx)}
+  .fp .m{color:var(--faint);font-size:10px}
+  .fp .pk{color:var(--faint);font-variant-numeric:tabular-nums;
+          display:inline-block;min-width:26px}
+  @keyframes flash{from{background:#243447}to{background:transparent}}
+  @media (max-width:700px){
+    .shell{grid-template-columns:1fr}
+    .feed{position:static;min-height:0;border-left:0;
+          border-top:1px solid var(--line)}
+  }
 </style>
 </head>
 <body>
@@ -89,6 +123,7 @@
     <span class="clock num" id="clock">—</span>
     <span class="until num" id="until"></span>
     <span class="spacer"></span>
+    <button id="mode" title="Order by my board, or by board rank adjusted for roster needs">Weighted</button>
     <label class="slotpick">slot <select id="slot"></select></label>
     <button id="undo">Undo</button>
   </div>
@@ -99,12 +134,21 @@
 
 <nav id="tabs"></nav>
 
-<table><tbody id="rows"></tbody></table>
-<footer id="foot">Click a row to cross a player off. Click <b>+</b> to add him to your roster.</footer>
+<div class="shell">
+  <div>
+    <table><tbody id="rows"></tbody></table>
+    <footer id="foot">Click a row to cross a player off. Click <b>+</b> to add him to your roster.</footer>
+  </div>
+  <aside class="feed">
+    <h3>Recent picks <span class="age" id="age"></span></h3>
+    <div id="feed"></div>
+  </aside>
+</div>
 
 <script>
 const POS = ["ALL","RB","WR","TE","QB","DST","MINE"];
-let pos = "ALL", last = null;
+let pos = "ALL", last = null, weighted = true;
+let lastCount = null, lastChange = Date.now();
 
 const el = id => document.getElementById(id);
 
@@ -167,9 +211,19 @@ function render(d){
 
   buildSlots((d.league&&d.league.teams)||10, d.league&&d.league.my_slot);
 
+  // freshness: measured from when the pick count last moved, not from polls
+  if(d.drafted_count !== lastCount){ lastCount = d.drafted_count; lastChange = Date.now(); }
+  renderFeed(d);
+  tickAge();   // paint immediately rather than waiting for the next tick
+
   const mineView = pos==="MINE";
-  const list = mineView ? d.mine
-                        : d.available.filter(p=>pos==="ALL"||p.pos===pos);
+  let list = mineView ? d.mine
+                      : d.available.filter(p=>pos==="ALL"||p.pos===pos);
+  // Weighted order pushes covered positions down without hiding them, so
+  // tier bands would fragment; tiers move inline instead.
+  const banded = !weighted || mineView;
+  if(!mineView && weighted)
+    list = list.slice().sort((a,b)=>(a.adj_rank-b.adj_rank)||(a.my_rank-b.my_rank));
   const tb=el("rows"); tb.innerHTML="";
   if(!list.length){
     tb.innerHTML=`<tr><td class="empty">${
@@ -189,12 +243,13 @@ function render(d){
     }
     const t = pos==="ALL" ? p.tier : p.pos_tier;
     const tn = pos==="ALL" ? p.tier_name : p.pos_tier_name;
-    if(t!==tier){
+    if(banded && t!==tier){
       tier=t;
       const tr=tb.insertRow(); tr.className="tierhdr";
       const td=tr.insertCell(); td.colSpan=5; td.textContent = tn || ("Tier "+t);
     }
-    const tr=tb.insertRow(); tr.className="p";
+    const tr=tb.insertRow();
+    tr.className = "p" + (p.need_tag==="depth" ? " dep" : "");
     tr.onclick=e=>{ if(e.target.classList.contains("act")) return;
                     post("/api/pick",{espn_id:p.espn_id,mine:false}); };
 
@@ -203,8 +258,11 @@ function render(d){
 
     const nm=tr.insertCell(); nm.className="nm";
     const dl = p.delta>0 ? ` <span class="dl">+${p.delta}</span>` : "";
-    nm.innerHTML = `${p.name}<span class="meta">${p.pos} · ${p.team}`
-      + (p.bye?` · bye ${p.bye}`:``) + `</span>${dl}`
+    const tag = (weighted && p.need_tag && p.need_tag!=="starter")
+      ? ` <span class="tag ${p.need_tag}">${p.need_tag}</span>` : "";
+    const tierBit = (!banded && t!=null) ? ` · T${t}` : "";
+    nm.innerHTML = `${p.name}${tag}<span class="meta">${p.pos} · ${p.team}`
+      + (p.bye?` · bye ${p.bye}`:``) + tierBit + `</span>${dl}`
       + (p.flags?`<span class="flag">${p.flags}</span>`:``);
 
     const sv=tr.insertCell(); sv.className="sv";
@@ -223,6 +281,30 @@ function render(d){
     `${d.available.length} available · ${d.drafted_count} drafted · you have ${d.mine.length}`;
 }
 
+function renderFeed(d){
+  const f = el("feed"), r = d.recent || [];
+  if(!r.length){ f.innerHTML = `<div class="fp"><span class="m">no picks yet</span></div>`; return; }
+  // Re-render only when the set changes, so the flash animation means
+  // "this is new" rather than firing on every poll.
+  const sig = r.map(x=>x.pick+":"+x.name).join("|");
+  if(f.dataset.sig === sig) return;
+  f.dataset.sig = sig;
+  f.innerHTML = r.map(x =>
+    `<div class="fp${x.mine?" me":""}">
+       <span class="n"><span class="pk">${x.pick}</span>${x.name}</span>
+       <span class="m">${x.pos} · ${x.team}${x.by?" · "+x.by:""}</span>
+     </div>`).join("");
+}
+
+function tickAge(){
+  const a = el("age");
+  if(lastCount === null){ a.textContent = ""; return; }
+  const s = Math.round((Date.now()-lastChange)/1000);
+  a.textContent = s<60 ? `${s}s ago` : `${Math.floor(s/60)}m ${s%60}s ago`;
+  a.className = "age" + (s>400 ? " dead" : s>150 ? " stale" : "");
+}
+setInterval(tickAge, 1000);
+
 function buildSlots(n, cur){
   const s=el("slot");
   if(s.dataset.n==String(n) && s.value==String(cur??"")) return;
@@ -235,6 +317,11 @@ function buildSlots(n, cur){
 }
 el("slot").onchange=e=>post("/api/slot",{slot:e.target.value?+e.target.value:null});
 el("undo").onclick=()=>post("/api/undo");
+el("mode").onclick=()=>{ weighted=!weighted;
+  el("mode").textContent = weighted ? "Weighted" : "Board";
+  el("mode").style.borderColor = weighted ? "var(--accent)" : "var(--line)";
+  render(last); };
+el("mode").style.borderColor="var(--accent)";
 
 tabs();
 fetch("/api/state").then(r=>r.json()).then(render);

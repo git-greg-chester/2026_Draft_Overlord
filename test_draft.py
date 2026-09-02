@@ -119,3 +119,56 @@ def test_transports_merge_without_clobbering():
     # API briefly returning nothing must not wipe the board mid-draft.
     S.api = {}
     assert S.drafted() == {3: 0, 1: 0, 2: 0}
+
+
+def test_qb_deweighted_after_one_but_never_removed():
+    """The explicit ask: taking a QB should push QBs down hard, not hide them."""
+    from draft import apply_need_weights, need_penalty
+
+    avail = [{"name": "qb2", "pos": "QB", "my_rank": 20},
+             {"name": "rb5", "pos": "RB", "my_rank": 50}]
+
+    before = roster_needs([], SLOTS)
+    apply_need_weights(avail, before, SLOTS)
+    assert avail[0]["need_tag"] == "starter" and avail[0]["adj_rank"] == 20
+
+    after = roster_needs([P("myqb", "QB", 1)], SLOTS)
+    apply_need_weights(avail, after, SLOTS)
+    qb = avail[0]
+    assert qb["need_tag"] == "depth"
+    assert qb["adj_rank"] > 50, "second QB should now sort behind the RB"
+    assert qb in avail, "de-weighted, never removed"
+
+
+def test_rb_keeps_value_via_flex_after_starters_filled():
+    """RB still fills FLEX, so it must not be penalised like a second QB."""
+    from draft import apply_need_weights
+
+    mine = [P("rb1", "RB", 1), P("rb2", "RB", 2)]
+    needs = roster_needs(mine, SLOTS)
+    avail = [{"name": "rb3", "pos": "RB", "my_rank": 30},
+             {"name": "qb2", "pos": "QB", "my_rank": 30}]
+    apply_need_weights(avail, needs, SLOTS)
+    rb, qb = avail
+    assert rb["need_tag"] == "flex"
+    assert qb["need_tag"] == "starter"      # QB slot still empty here
+    assert rb["adj_rank"] < qb["adj_rank"] + 100
+
+
+def test_penalty_grows_with_surplus():
+    from draft import need_penalty
+    one = need_penalty("QB", roster_needs([P("a", "QB", 1)], SLOTS), SLOTS)[0]
+    two = need_penalty("QB", roster_needs(
+        [P("a", "QB", 1), P("b", "QB", 2)], SLOTS), SLOTS)[0]
+    assert two > one, "stacking a third QB should hurt more than the second"
+
+
+def test_weighting_is_stable_ordering():
+    """Equal adjusted ranks fall back to board rank, so order never jitters."""
+    from draft import apply_need_weights
+    avail = [{"name": "b", "pos": "WR", "my_rank": 12},
+             {"name": "a", "pos": "WR", "my_rank": 11}]
+    needs = roster_needs([], SLOTS)
+    apply_need_weights(avail, needs, SLOTS)
+    ordered = sorted(avail, key=lambda p: (p["adj_rank"], p["my_rank"]))
+    assert [p["name"] for p in ordered] == ["a", "b"]

@@ -12,6 +12,14 @@ SAFE_MARGIN = 10      # ADP at least this far after my pick -> should still be t
 GONE_MARGIN = -5      # ADP this far before my pick -> expect him gone
 CLIFF_THRESHOLD = 2   # <= this many left in a tier -> warn
 
+# Need weighting, expressed as ranks-worth of penalty added to my_rank.
+# A player who can still fill an empty starting slot is untouched. One who
+# only adds depth is pushed down hard but never removed -- a backup QB in
+# round 12 is still a real pick.
+PENALTY_FLEX = 12       # fills only FLEX / WR-TE, not a dedicated slot
+PENALTY_DEPTH = 45      # pure bench depth at a position already covered
+PENALTY_SURPLUS = 25    # per extra body beyond the first backup
+
 
 def pick_number(round_num: int, slot: int, team_count: int) -> int:
     """1-indexed overall pick for a snake draft."""
@@ -100,6 +108,47 @@ def roster_needs(my_players: list[dict], slot_counts: dict[str, int]) -> dict:
     }
 
 
+def need_penalty(pos: str, needs: dict, slot_counts: dict[str, int]) -> tuple[int, str]:
+    """How far to push a position down once my starters there are covered.
+
+    Returns (penalty in ranks, short reason for the UI). Never removes a
+    player -- depth still has value, it just shouldn't outrank a starter.
+    """
+    open_slots = needs.get("open_slots") or {}
+    counts = needs.get("counts") or {}
+
+    # Still fills a dedicated starting slot -> full value.
+    for slot, n in open_slots.items():
+        if n and SLOT_ELIGIBLE.get(slot, {slot}) == {pos}:
+            return 0, "starter"
+
+    # Fills an open flex-ish slot -> mild discount, since a better position
+    # might want that slot instead.
+    for slot, n in open_slots.items():
+        if n and pos in SLOT_ELIGIBLE.get(slot, {slot}) and len(SLOT_ELIGIBLE.get(slot, {slot})) > 1:
+            return PENALTY_FLEX, "flex"
+
+    # Nothing left to start him in. Penalise, and more for each extra body.
+    started = sum(n for s, n in starters_from_slots(slot_counts).items()
+                  if pos in SLOT_ELIGIBLE.get(s, {s}))
+    surplus = max(0, counts.get(pos, 0) - max(1, started))
+    return PENALTY_DEPTH + surplus * PENALTY_SURPLUS, "depth"
+
+
+def apply_need_weights(available: list[dict], needs: dict,
+                       slot_counts: dict[str, int]) -> None:
+    """Annotate each available player with a need-adjusted rank, in place."""
+    cache: dict[str, tuple[int, str]] = {}
+    for p in available:
+        pos = p["pos"]
+        if pos not in cache:
+            cache[pos] = need_penalty(pos, needs, slot_counts)
+        penalty, reason = cache[pos]
+        p["need_penalty"] = penalty
+        p["need_tag"] = reason
+        p["adj_rank"] = p.get("my_rank", 9999) + penalty
+
+
 def tier_cliffs(available: list[dict]) -> list[dict]:
     """For each position, how many players remain in the best available tier."""
     out = []
@@ -161,8 +210,12 @@ def build_view(board: list[dict], drafted: dict[int, int], my_team_id: int,
     for p in available:
         p["survival"] = survival(p, nxt)
 
-    needs = roster_needs(mine, state.slot_counts if state else {})
+    slot_counts = state.slot_counts if state else {}
+    needs = roster_needs(mine, slot_counts)
+    apply_need_weights(available, needs, slot_counts)
     return {
+        # Each player carries adj_rank; the client sorts, so the payload
+        # doesn't ship the same 193 players twice on every pick.
         "available": available,
         "mine": mine,
         "drafted_count": picks_made,

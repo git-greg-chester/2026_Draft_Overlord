@@ -71,7 +71,32 @@ setTimeout(() => {
   d.querySelector('tr.p td.act').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
   console.log('POSTs from clicks:', JSON.stringify(posted));
 
-  const ok = rows.length > 0 && tiers.length > 0 && errors.length === 0;
+  // Recent-picks feed
+  const feed = d.querySelectorAll('.fp');
+  console.log('feed entries     :', feed.length, '| mine:', d.querySelectorAll('.fp.me').length);
+  console.log('age label        :', JSON.stringify(d.getElementById('age').textContent));
+
+  // Need weighting: default is weighted, which drops tier bands on purpose
+  // and pushes covered positions down without removing them.
+  const tagged = [...d.querySelectorAll('.tag')].map(t => t.textContent);
+  console.log('need tags        :', [...new Set(tagged)].join(',') || '(none)');
+  const posOf = list => { const r = list.find(x => /QB ·/.test(x.textContent));
+                          return r ? list.indexOf(r) : -1; };
+  const qbWeighted = posOf([...d.querySelectorAll('tr.p')]);
+  const bandedWeighted = d.querySelectorAll('tr.tierhdr').length;
+
+  d.getElementById('mode').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const qbBoard = posOf([...d.querySelectorAll('tr.p')]);
+  const bandedBoard = d.querySelectorAll('tr.tierhdr').length;
+  console.log('tier bands       : weighted', bandedWeighted, '/ board', bandedBoard);
+  console.log('first QB row     : weighted', qbWeighted, '/ board', qbBoard);
+  d.getElementById('mode').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+
+  const ok = rows.length > 0
+    && bandedWeighted === 0 && bandedBoard > 0
+    && qbWeighted >= qbBoard          // weighting never promotes a covered position
+    && feed.length > 0
+    && errors.length === 0;
   console.log(ok ? '\nPASS' : '\nFAIL');
   process.exit(ok ? 0 : 1);
 }, 400);
