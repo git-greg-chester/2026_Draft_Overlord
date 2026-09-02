@@ -1,8 +1,9 @@
 /* Paste one of these into the ESPN draft room's DevTools console (Cmd+Opt+J).
  * They only read the DOM; nothing is modified in the draft.
  *
- * Set MY_TEAM to your team name exactly as the draft room prints it, or your
- * own picks are only crossed off, not tracked as yours.
+ * MY_TEAM is prefilled from the league API. If the draft room renders it any
+ * differently, fix it here -- otherwise your picks are only crossed off, not
+ * tracked as yours, and every roster-aware feature quietly misbehaves.
  *
  * Stop either one with:  clearInterval(window.__dov)
  */
@@ -13,7 +14,7 @@
 // ---------------------------------------------------------------------------
 window.__dov && clearInterval(window.__dov);
 {
-  const MY_TEAM = 'PUT YOUR TEAM NAME HERE';
+  const MY_TEAM = 'G-Reg the 3rd Leg';   // exact ESPN team name; verify in the room
   const PORT = 8777;                       // 8777 = real league board
   const rows = () => [...document.querySelectorAll('[class*="pick__message"]')];
   const nameOf = li => (li.querySelector('.playerinfo__playername') || {}).textContent?.trim();
@@ -42,7 +43,7 @@ window.__dov && clearInterval(window.__dov);
 // ---------------------------------------------------------------------------
 window.__dov && clearInterval(window.__dov);
 {
-  const MY_TEAM = 'PUT YOUR TEAM NAME HERE';
+  const MY_TEAM = 'G-Reg the 3rd Leg';   // exact ESPN team name; verify in the room
   const rows = () => [...document.querySelectorAll('[class*="pick__message"]')];
   const nameOf = li => (li.querySelector('.playerinfo__playername') || {}).textContent?.trim();
   window.__dov = setInterval(async () => {

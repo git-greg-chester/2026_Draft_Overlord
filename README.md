@@ -1,41 +1,65 @@
 # 2026 Draft Overlord
 
 Live draft board for **Boys Rule Girls Drule** — 10-team, full PPR, snake,
-no kicker. Draft: **Sep 4 2026, 8:00pm EDT**.
+**no kicker**. Draft: **Sep 4 2026, 8:00pm EDT**.
 
-Reads the draft from ESPN's fantasy API (exact player IDs) rather than reading
-the screen. Runs locally in a browser tab beside the ESPN draft room.
+Reads the draft from ESPN (exact player IDs) rather than reading the screen.
+Runs locally in a browser tab beside the ESPN draft room.
 
-Lineup: `QB / RB / RB / WR / WR / WR-TE / TE / FLEX / D-ST` · 16 roster, 7 bench.
+- Lineup: `QB / RB / RB / WR / WR / WR-TE / TE / FLEX / D-ST` — 9 starters
+- Roster 19 = **16 drafted rounds** + 3 IR · 7 bench · 160 total picks
+- You are **team 1, draft slot 1**: picks 1, 20, 21, 40, 41, 60, 61, 80, 81,
+  100, 101, 120, 121, 140, 141, 160 — the first overall pick, then back-to-back
+  turns every round
 
 ---
 
-## Draft-night runbook
+# Draft night
 
 ```bash
 cd ~/projects/2026_Draft_Overlord
 python3 -m uvicorn server:app --port 8777
 ```
 
-Open <http://127.0.0.1:8777> and tile it beside the ESPN draft room.
-Then paste snippet **A** from `draft_room_snippets.js` into the draft room
-console (set `MY_TEAM` first).
+1. Open <http://127.0.0.1:8777>, tile it beside the ESPN draft room.
+2. Paste snippet **A** from `draft_room_snippets.js` into the draft room's
+   DevTools console (Cmd+Opt+J). `MY_TEAM` is prefilled with
+   `G-Reg the 3rd Leg` — if the room renders your name differently, fix it,
+   or the board can't tell your picks from anyone else's and every
+   roster-aware feature quietly misbehaves.
+3. Confirm the console logs `pushed N -> matched N` every couple of seconds.
 
-**Run both transports.** Polling and the draft-room scraper feed the same
-board and merge safely — a lagging or empty API can never erase scraped
-picks, and the API wins where the two disagree. Whichever works on the
-night, the board is correct, and clicking rows by hand always works on top
-of both. Covered by `test_transports_merge_without_clobbering`.
+**Run both transports.** Polling and the draft-room scraper feed the same board
+and merge safely — an empty or lagging API can never erase scraped picks, and
+the API wins where they disagree. Clicking rows by hand works on top of both.
+Locked by `test_transports_merge_without_clobbering`.
 
-Draft slot is auto-derived from ESPN's pick order. Override it in the header
-dropdown if the order changes.
+### Controls
 
-- **Click a row** → cross that player off (someone else took him).
-- **Click `+`** → add him to *your* roster.
-- **Undo** → reverse the last manual action.
+| Action | Effect |
+|---|---|
+| Click a row | Cross that player off (someone else took him) |
+| Click `+` | Add him to **your** roster |
+| `Undo` | Reverse the last manual action |
+| `/` | Focus search · `Esc` clears |
+| `Weighted` / `Board` | Toggle need+scarcity ordering vs. your raw board |
+| slot dropdown | Override the auto-derived draft slot |
 
-If the connection dot is red, the board still works — cross players off by hand.
-That is the whole point of the fallback; nothing is lost.
+The **Recent picks** column on the right is your liveness check: if the age
+clock in its header goes amber (>150s) or red (>400s) while the draft is
+moving, a transport has died.
+
+### If something breaks
+
+- **Red connection dot** — the board still works. Cross players off by hand.
+  That fallback is the whole safety story; nothing is lost.
+- **Console says `bridge down: Failed to fetch`** — Chrome's Private Network
+  Access. Set `chrome://flags/#block-insecure-private-network-requests` to
+  **Disabled** and relaunch, or use the clipboard route (below).
+- **Server crashed** — just restart it. State is on disk and resumes; a banner
+  appears telling you to check your roster.
+- **Nothing crossing off** — re-paste the snippet. The server restarting kills
+  the old interval's target.
 
 ---
 
@@ -47,145 +71,165 @@ That is the whole point of the fallback; nothing is lost.
 python3 -m pip install -r requirements.txt
 ```
 
-**2. Build the board** (already done; re-run if the rankings change)
+**2. Build the board** (done; re-run if the rankings change)
 
 ```bash
 python3 ingest.py \
   --overall rankings/2026_Draft_Board_Overall.xlsx \
-  --positional rankings/2026_Draft_Board_Positional.xlsx
+  --positional rankings/2026_Draft_Board_Positional.xlsx --refresh
 ```
+
+`--refresh` re-pulls ESPN's ranks and ADP, which move daily. **Run it the day
+before the draft** — the legend flags Love, Jeanty, Jacobs and Conner as
+volatile.
 
 Writes `board.json`. **`unmatched.csv` must be empty** — an unmatched player
 never gets crossed off, which is worse than no tool at all. Currently 193/193
 match exactly.
 
-**3. Add ESPN credentials** (optional — enables auto cross-off)
+**3. ESPN credentials**
 
 ```bash
-mkdir -p ~/.config/draft-overlord
-cp config.example.json ~/.config/draft-overlord/config.json
-chmod 600 ~/.config/draft-overlord/config.json
+python3 setup_config.py
 ```
 
-Fill in:
+Run it in your own terminal. It reads the cookies without echoing them, writes
+`~/.config/draft-overlord/config.json` at `0600`, then verifies against ESPN and
+prints your league's teams so you can confirm the right `team_id`. Paste your
+team URL when prompted and it extracts `leagueId`/`teamId` for you.
 
-| Field | Where to get it |
-|---|---|
-| `league_id` | ESPN URL: `.../leagues/{THIS}` |
-| `team_id` | Your team's id in that league |
-| `draft_slot` | Leave `null` — set it in the UI on draft night |
-| `espn_s2` | DevTools → Application → Cookies → `fantasy.espn.com` |
-| `swid` | Same place, keep the `{braces}` |
-
-Secrets live **outside** the repo on purpose. Nothing here can commit them.
+Secrets live **outside** the repo on purpose — no `.gitignore` edit or careless
+`git add -f` can leak a live session. `espn_s2` dies if you log out of ESPN or
+change your password; re-run this if so.
 
 ---
 
 ## Rehearsing
 
-Simulate a full draft against a running server — no cookies needed:
-
 ```bash
 python3 -m uvicorn server:app --port 8777 &
-python3 replay.py --simulate --slot 3
+python3 replay.py --simulate --slot 1 --delay 1
 ```
 
-Prints the board at each of your picks. Add `--delay 1` to watch it move in the
-browser. The simulation drafts on ADP alone, so its rosters look silly (four
-QBs) — it exists to push picks through the pipeline, not to draft well.
+Feeds a simulated draft in at one pick a second so you can watch the feed fill
+and the ordering shift in the browser. It drafts on ADP alone, so its rosters
+look silly (four QBs) — it exists to exercise the pipeline, not to draft well.
 
-Once cookies are configured you can replay a real finished draft:
+With cookies configured, replay a real finished draft:
 
 ```bash
 python3 replay.py --from-league 2025 --slot 1
 ```
 
-## Do picks arrive live? (partly answered)
+`/api/reset` returns the server to live polling afterwards.
 
-Replaying a *finished* draft proves we can read picks; it does not prove ESPN
-writes them *during* a draft. `watch.py` measures that.
+Tests: `python3 -m pytest -q` (56) and `npm test` (jsdom UI render).
+
+---
+
+## Transports
+
+### Draft-room bridge — proven
+
+Scrapes the draft room DOM. Validated on a live mock: 160 picks, 100% name
+match, and the pick list does not virtualise, so old picks stay readable.
+
+Selector: `[class*="pick__message"] .playerinfo__playername`
+
+Snippets are in **`draft_room_snippets.js`**:
+
+- **A — direct**, needs the Chrome PNA flag disabled. No clipboard hijacking.
+- **B — clipboard**, no browser settings required. Pair with
+  `python3 clipboard_bridge.py`. The draft tab must stay focused.
+- **C — re-discovery**, prints which DOM containers hold your players, in case
+  ESPN changes its markup before Sunday.
+
+Console `copy()` does **not** work inside `setInterval` — use
+`navigator.clipboard.writeText`.
+
+### API polling — unproven live
 
 ```bash
 python3 watch.py --discover        # list leagues on the account
 python3 watch.py --league <id>     # timestamp every pick as it lands
 ```
 
-**Tested 2026-09-01 against a live ESPN mock draft:** the room reached 160
-picks while `mDraftDetail`, `mRoster`, `mTeam`, `mMatchup` and
-`mPendingTransactions` all returned zero. On completion the mock league
-**404'd** — ESPN deletes mocks, they are never persisted.
+What's established:
 
-So the mock proves nothing about a real draft. What is known:
+- Real league drafts **are** persisted — 2023, 2024, 2025 all hold full pick
+  data readable right now.
+- ESPN **mock drafts are ephemeral**: a live mock reached 160 picks while every
+  API view returned zero, then the league 404'd on completion. Mocks cannot
+  answer this question; don't retry that experiment.
+- A throwaway real league **also cannot**: ESPN refuses to start a draft while
+  manager slots are unfilled.
 
-- Real league drafts *are* written: 2023, 2024, 2025 all hold full pick data.
-- Whether they are written live or only at completion is **still untested**.
-- To settle it, create a throwaway *real* league (mocks won't do), schedule a
-  draft a few minutes out, let it autodraft, and point `watch.py` at it.
-
-Until then the draft-room bridge below is the transport we trust.
-
-## Draft-room bridge (proven)
-
-Reads picks straight out of the ESPN draft room DOM. Validated on a live
-mock: 160 picks, 100% name match, no virtualization of the pick list.
-
-Selector: `[class*="pick__message"] .playerinfo__playername`
-
-Direct POST is blocked by Chrome's Private Network Access (HTTPS page ->
-127.0.0.1), so either:
-
-- set `chrome://flags/#block-insecure-private-network-requests` to
-  **Disabled** and use the direct-fetch snippet, or
-- run `python3 clipboard_bridge.py` and use the clipboard snippet, which no
-  browser policy blocks. The draft tab must stay focused.
-
-Both snippets live in the console; see git history for the exact text.
-`copy()` does not work inside `setInterval` -- use
-`navigator.clipboard.writeText`.
-
-Tests: `python3 -m pytest -q` (21) and `npm test` (jsdom UI render).
+So whether a real draft writes picks live or only at completion is still
+unknown — and it no longer matters, because both transports run together and
+merge safely.
 
 ---
 
 ## What the columns mean
 
-- **Rank** — your board's rank (overall, or positional inside a position tab).
+- **Rank** — your board rank (overall, or positional inside a position tab).
 - **safe / 50/50 / gone** — whether ESPN's *live* ADP says he survives to your
-  next pick. Live ADP beats the stale industry average at predicting an ESPN
-  room. Thresholds are in `draft.py` (`SAFE_MARGIN`, `GONE_MARGIN`).
+  next pick. Live ADP predicts an ESPN room better than a stale industry
+  average. See `SAFE_MARGIN`, `GONE_MARGIN`.
 - **+n** (green) — your `DELTA`: ESPN ranks him this many picks *later* than you
-  do, so the room should let him fall. These are the value targets.
+  do, so the room should let him fall. Value targets.
 - **adp** — ESPN live ADP.
-- **`starter` / `flex` / `depth`** — need weighting. Once a position is covered
-  it gets pushed down but never removed (see `PENALTY_*` in `draft.py`).
-- **`scarce +n`** — tier scarcity. See below.
+- **`starter` / `flex` / `depth`** — need weighting.
+- **`scarce +n`** — tier scarcity.
 
-## How scarcity works
+Header chips lead with **runs**, then scarcity, then tier counts, then open
+slots. The `Board` toggle turns all weighting off and shows your board exactly
+as written.
 
-The cost of waiting on a player is: *how likely his tier is gone when I pick
-again* × *how far the drop is to the next tier*. Both are measurable, and the
-product is in ranks, so it just subtracts from the adjusted rank.
+## The model
+
+Two adjustments to your board rank, both measured in ranks so they simply add.
+
+**Need weighting** — once a position is covered it's pushed down, never removed:
+
+| Situation | Penalty |
+|---|---|
+| Fills an empty starting slot | 0 |
+| Only fills FLEX or WR-TE | `PENALTY_FLEX` 12 |
+| Pure depth | `PENALTY_DEPTH` 45 |
+| Each surplus body | `PENALTY_SURPLUS` 25 |
+
+**Scarcity** — the cost of waiting is *how likely his tier is gone when I pick
+again* × *how far the drop is to the next tier*:
 
 - **P(tier gone)** — each member's chance of being taken by the horizon, from a
   logistic around his ADP (`ADP_SPREAD`), multiplied together.
-- **Cliff** — ranks between the best player in this tier and the best in the
-  next tier at that position.
+- **Cliff** — ranks between the best in this tier and the best in the next.
 - **Horizon** — the pick *after* your next one. The question is "take him now or
-  get one at my next turn", so back-to-back picks (slot 1 holds 20 and 21)
-  carry almost no urgency. That falls out of the model rather than being
-  special-cased.
+  get one next turn", so your back-to-back picks at 20/21 carry almost no
+  urgency. That falls out of the model rather than being special-cased.
 
-Tunable in `draft.py`: `SCARCITY_DAMPING`, `SCARCITY_CAP`, `ADP_SPREAD`.
+`PENALTY_DEPTH (45) > SCARCITY_CAP (35)` is deliberate and tested: scarcity may
+promote a position you still need, but can never promote one you've covered.
 
-**Positional runs.** `P(tier gone)` multiplies independent probabilities, which
-is optimistic exactly when it matters, because drafts go in bursts — the league
-ran 7 RBs in one round in 2025. When a position comes off the board faster than
-the remaining pool implies, its horizon stretches by that ratio.
+**Positional runs** — `P(tier gone)` assumes independence, which is optimistic
+exactly when it matters, because drafts go in bursts (the league ran 7 RBs in
+one round in 2025). When a position leaves faster than the remaining pool
+implies, its horizon stretches by that ratio.
 
-Two guards stop noise becoming signal: a run needs at least `RUN_MIN_COUNT`
-picks (a single TE would otherwise divide by a tiny baseline and read as 2.5x),
-and the expected count is floored at one. Whatever ratio is applied is shown in
-the header, because a hidden adjustment is worse than a noisy chip.
+Three guards stop noise becoming signal, all learned the hard way — the first
+cut read a *single* TE pick as a 2.5× run, because scarce positions have a tiny
+baseline:
+
+- `RUN_MIN_COUNT` 3 — fewer picks is noise
+- `RUN_MIN_EXPECTED` 1.0 — floors the denominator
+- `RUN_MIN_RATIO` 1.25 — below this is ordinary variance
+
+Whatever ratio is applied is shown in the header; a hidden adjustment is worse
+than a noisy chip.
+
+All constants are at the top of `draft.py`. If scarcity feels timid on the
+night, raise `SCARCITY_DAMPING` (0.6) toward 1.0.
 
 ## Crash recovery
 
@@ -194,19 +238,10 @@ Losing it mid-draft is the app's worst failure mode: the scraper repopulates
 *who* is drafted but not which picks were **mine**, so needs and weighting would
 silently reset to an empty roster while looking completely normal.
 
-Guards: the snapshot is ignored if it belongs to another league or is more than
-18 hours old, and a corrupt file is skipped rather than fatal. On a successful
-resume the board shows a banner — check your roster before trusting it.
-
-## Search
-
-`/` focuses the box, `Esc` clears it. Search spans drafted players too, so
-"has he gone yet?" is answerable; taken players appear struck through with the
-team that took them.
-
-Header chips lead with scarcity (`TE T1 87% gone by #40`), then raw tier
-counts, then open slots. The **Weighted / Board** toggle turns all of this off
-and shows your board exactly as written.
+Guards: ignored if it belongs to another league or is >18h old; a corrupt file
+is skipped rather than fatal; writes are atomic. Verified against a real
+`SIGKILL`. On resume the board shows a banner — check your roster before
+trusting it.
 
 ## Files
 
@@ -214,7 +249,13 @@ and shows your board exactly as written.
 |---|---|
 | `ingest.py` | Rankings → ESPN player IDs → `board.json` |
 | `espn.py` | API client; classifies 401 / 404 / network |
-| `draft.py` | Snake math, roster needs, tier cliffs, survival |
-| `server.py` | FastAPI + SSE, manual pick/undo |
+| `draft.py` | Snake math, needs, scarcity, runs — all tunables live here |
+| `server.py` | FastAPI + SSE, manual pick/undo, scrape intake, persistence |
 | `static/index.html` | The board |
-| `replay.py` | Rehearsal harness |
+| `setup_config.py` | Interactive credential setup + verification |
+| `draft_room_snippets.js` | Console snippets A/B/C for the draft room |
+| `clipboard_bridge.py` | Clipboard transport when PNA blocks direct POST |
+| `watch.py` | Measures whether picks arrive live; `--discover` lists leagues |
+| `replay.py` | Rehearsal harness (simulated or a real past season) |
+| `test_draft.py` `test_espn.py` `test_server.py` | 56 tests |
+| `test_ui.js` | jsdom render test — headless Chrome hangs on this machine |
