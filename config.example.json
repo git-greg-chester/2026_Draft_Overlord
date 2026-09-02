@@ -1,0 +1,9 @@
+{
+  "_comment": "Copy to ~/.config/draft-overlord/config.json and chmod 600. Never commit the real one.",
+  "season": 2026,
+  "league_id": 123456,
+  "team_id": 1,
+  "draft_slot": null,
+  "espn_s2": "PASTE_FROM_BROWSER_COOKIE",
+  "swid": "{PASTE-FROM-BROWSER-COOKIE}"
+}

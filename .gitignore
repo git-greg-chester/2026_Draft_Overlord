@@ -1,0 +1,19 @@
+# Generated data
+board.json
+unmatched.csv
+universe.json
+replay_*.json
+
+# Secrets never belong here -- real config lives in ~/.config/draft-overlord/
+config.json
+*.local.*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# macOS
+.DS_Store
