@@ -21,3 +21,7 @@ venv/
 # Node (UI test harness only)
 node_modules/
 package-lock.json
+
+# Live draft state snapshot
+draft_state.json
+draft_state.tmp

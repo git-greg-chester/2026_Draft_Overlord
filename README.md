@@ -177,6 +177,33 @@ product is in ranks, so it just subtracts from the adjusted rank.
 
 Tunable in `draft.py`: `SCARCITY_DAMPING`, `SCARCITY_CAP`, `ADP_SPREAD`.
 
+**Positional runs.** `P(tier gone)` multiplies independent probabilities, which
+is optimistic exactly when it matters, because drafts go in bursts — the league
+ran 7 RBs in one round in 2025. When a position comes off the board faster than
+the remaining pool implies, its horizon stretches by that ratio.
+
+Two guards stop noise becoming signal: a run needs at least `RUN_MIN_COUNT`
+picks (a single TE would otherwise divide by a tiny baseline and read as 2.5x),
+and the expected count is floored at one. Whatever ratio is applied is shown in
+the header, because a hidden adjustment is worse than a noisy chip.
+
+## Crash recovery
+
+State is written to `draft_state.json` on every change and restored on boot.
+Losing it mid-draft is the app's worst failure mode: the scraper repopulates
+*who* is drafted but not which picks were **mine**, so needs and weighting would
+silently reset to an empty roster while looking completely normal.
+
+Guards: the snapshot is ignored if it belongs to another league or is more than
+18 hours old, and a corrupt file is skipped rather than fatal. On a successful
+resume the board shows a banner — check your roster before trusting it.
+
+## Search
+
+`/` focuses the box, `Esc` clears it. Search spans drafted players too, so
+"has he gone yet?" is answerable; taken players appear struck through with the
+team that took them.
+
 Header chips lead with scarcity (`TE T1 87% gone by #40`), then raw tier
 counts, then open slots. The **Weighted / Board** toggle turns all of this off
 and shows your board exactly as written.

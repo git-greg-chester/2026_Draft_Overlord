@@ -75,3 +75,78 @@ def test_recent_ignores_players_off_the_board():
     S.api = {1: 5, 999: 5, 2: 5}
     names = [x["name"] for x in S.recent()]
     assert names == ["Bravo", "Alpha"]
+
+
+# --- crash persistence ----------------------------------------------------
+
+def test_state_survives_a_restart(tmp_path):
+    """The real failure mode: losing which picks were mine."""
+    p = tmp_path / "s.json"
+    S = server.S
+    S.cfg = server.Config(league_id=435266, team_id=1)
+    S.manual = {1: 1, 2: 0}          # one mine, one someone else's
+    S.scraped = {3: 0}
+    S.history = [1, 2]
+    S.my_slot = 4
+    S.save(p)
+
+    fresh = server.State()
+    fresh.cfg = server.Config(league_id=435266, team_id=1)
+    msg = fresh.restore(p)
+    assert "resumed 3 picks" in msg
+    assert fresh.manual == {1: 1, 2: 0}
+    assert fresh.scraped == {3: 0}
+    assert fresh.history == [1, 2]
+    assert fresh.my_slot == 4
+
+
+def test_will_not_resume_another_leagues_state(tmp_path):
+    p = tmp_path / "s.json"
+    S = server.S
+    S.cfg = server.Config(league_id=111)
+    S.manual = {1: 1}
+    S.save(p)
+
+    fresh = server.State()
+    fresh.cfg = server.Config(league_id=222)
+    assert "ignored state from league 111" in fresh.restore(p)
+    assert fresh.manual == {}
+
+
+def test_will_not_resume_stale_state(tmp_path):
+    import json as _json
+    p = tmp_path / "s.json"
+    server.S.manual = {1: 1}
+    server.S.save(p)
+    d = _json.loads(p.read_text())
+    d["saved_at"] -= server.STATE_MAX_AGE + 60
+    p.write_text(_json.dumps(d))
+
+    fresh = server.State()
+    assert "old" in fresh.restore(p)
+    assert fresh.manual == {}
+
+
+def test_corrupt_state_file_is_survivable(tmp_path):
+    p = tmp_path / "s.json"
+    p.write_text("{not json")
+    fresh = server.State()
+    assert fresh.restore(p) == "unreadable state file, ignored"
+    assert fresh.manual == {}
+
+
+def test_missing_state_file_is_silent(tmp_path):
+    assert server.State().restore(tmp_path / "nope.json") is None
+
+
+def test_scrape_direction_survives_restart(tmp_path):
+    """Otherwise the recent-picks feed would render backwards after a restart."""
+    p = tmp_path / "s.json"
+    S = server.S
+    S.scrape_newest_first = True
+    S.scrape_order = [3, 2, 1]
+    S.save(p)
+    fresh = server.State()
+    fresh.restore(p)
+    assert fresh.scrape_newest_first is True
+    assert fresh.scrape_order == [3, 2, 1]

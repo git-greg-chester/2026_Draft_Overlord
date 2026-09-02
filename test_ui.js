@@ -102,9 +102,30 @@ setTimeout(() => {
   console.log('scarcity         : badges', scarceBadges, '| chips', scarceChips,
               '| in board mode', scarceInBoard);
 
+  // Scarcity may promote a position I still need -- that's the feature. And
+  // late on, when starters are filled, the best available legitimately *are*
+  // depth players. The invariant is relative: a covered position must sit
+  // lower than it would on the raw board, never higher.
+  const wRows = [...d.querySelectorAll('tr.p')];
+  const depthRow = wRows.find(r => r.classList.contains('dep'));
+  let demoted = false;
+  if (!depthRow) {
+    console.log('depth demoted    : SKIP - no depth rows in this fixture');
+    demoted = true;
+  } else {
+    const id = depthRow.dataset.id;
+    const wIdx = wRows.indexOf(depthRow);
+    d.getElementById('mode').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    const bIdx = [...d.querySelectorAll('tr.p')].findIndex(r => r.dataset.id === id);
+    d.getElementById('mode').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    // bIdx must resolve, or the check is vacuous.
+    demoted = bIdx >= 0 && wIdx >= bIdx;
+    console.log('depth demoted    : id', id, '| board', bIdx, '-> weighted', wIdx);
+  }
+
   const ok = rows.length > 0
     && bandedWeighted === 0 && bandedBoard > 0
-    && qbWeighted >= qbBoard          // weighting never promotes a covered position
+    && demoted
     && feed.length > 0
     && scarceBadges > 0 && scarceChips > 0 && scarceInBoard === 0
     && errors.length === 0;

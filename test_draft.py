@@ -263,3 +263,104 @@ def test_no_horizon_means_no_scarcity():
     apply_need_weights(avail, roster_needs([], SLOTS), SLOTS, {})
     assert avail[0]["scarcity"] == 0
     assert avail[0]["adj_rank"] == 10
+
+
+# --- positional runs ------------------------------------------------------
+
+def test_no_run_signal_from_too_few_picks():
+    from draft import run_ratios
+    avail = [TP(f"rb{i}", "RB", i, 1, 20.0) for i in range(10)]
+    assert run_ratios(["RB"] * 3, avail) == {}
+
+
+def test_detects_a_position_run():
+    """The league's own history: 7 RBs in a round."""
+    from draft import run_ratios
+    # Pool is a third RB, so a neutral draft takes ~4 RBs in 12 picks.
+    avail = ([TP(f"rb{i}", "RB", i, 1, 20.0) for i in range(14)]
+             + [TP(f"wr{i}", "WR", 50 + i, 1, 60.0) for i in range(26)])
+    window = ["RB"] * 8 + ["WR"] * 4
+    r = run_ratios(window, avail)
+    assert r["RB"] > 1.5, r
+    assert "WR" not in r, "WR is going slower than supply, not a run"
+
+
+def test_run_ratio_is_capped():
+    from draft import run_ratios, RUN_MAX_RATIO
+    avail = ([TP("rb", "RB", 1, 1, 20.0)]
+             + [TP(f"wr{i}", "WR", 10 + i, 1, 60.0) for i in range(39)])
+    r = run_ratios(["RB"] * 12, avail)
+    assert r["RB"] == RUN_MAX_RATIO
+
+
+def test_run_raises_p_gone_and_bonus():
+    """The whole point: a run makes the independence assumption less wrong."""
+    from draft import tier_scarcity
+    tier = [TP(f"rb{i}", "RB", 30 + i, 3, 55.0) for i in range(3)]
+    nxt = [TP("rb9", "RB", 80, 4, 95.0)]
+    calm = tier_scarcity(tier + nxt, horizon=60, picks_made=40)[("RB", 3)]
+    hot = tier_scarcity(tier + nxt, horizon=60, picks_made=40,
+                        runs={"RB": 2.0})[("RB", 3)]
+    assert hot["p_gone"] > calm["p_gone"]
+    assert hot["bonus"] > calm["bonus"]
+    assert hot["run"] == 2.0 and calm["run"] == 1.0
+
+
+def test_run_cannot_pull_the_horizon_backwards():
+    """A ratio of 1.0 must be identical to no run at all."""
+    from draft import tier_scarcity
+    tier = [TP("a", "TE", 20, 1, 30.0), TP("b", "TE", 60, 2, 70.0)]
+    base = tier_scarcity(tier, horizon=50, picks_made=30)[("TE", 1)]
+    same = tier_scarcity(tier, horizon=50, picks_made=30, runs={"TE": 1.0})[("TE", 1)]
+    assert base["p_gone"] == same["p_gone"]
+
+
+def test_a_single_pick_is_never_a_run():
+    """Scarce positions have a tiny baseline; one pick must not read as 2.5x."""
+    from draft import run_ratios
+    avail = ([TP(f"rb{i}", "RB", i, 1, 20.0) for i in range(20)]
+             + [TP(f"wr{i}", "WR", 30 + i, 1, 40.0) for i in range(19)]
+             + [TP("te1", "TE", 70, 1, 80.0)])          # TE is 1/40 of the pool
+    window = ["RB"] * 6 + ["WR"] * 5 + ["TE"]           # exactly one TE
+    r = run_ratios(window, avail)
+    assert "TE" not in r, f"one TE pick invented a run: {r}"
+
+
+def test_three_picks_at_a_scarce_position_is_a_real_run():
+    """The pick 73-92 TE run the league legend describes."""
+    from draft import run_ratios
+    avail = ([TP(f"rb{i}", "RB", i, 1, 20.0) for i in range(20)]
+             + [TP(f"wr{i}", "WR", 30 + i, 1, 40.0) for i in range(19)]
+             + [TP("te1", "TE", 70, 1, 80.0)])
+    window = ["RB"] * 5 + ["WR"] * 4 + ["TE"] * 3
+    r = run_ratios(window, avail)
+    assert r.get("TE", 0) > 1.5, r
+
+
+def test_common_position_needs_real_excess_not_just_presence():
+    from draft import run_ratios
+    # RB is a third of the pool, so 4 of 12 is exactly par -- not a run.
+    avail = ([TP(f"rb{i}", "RB", i, 1, 20.0) for i in range(13)]
+             + [TP(f"wr{i}", "WR", 30 + i, 1, 40.0) for i in range(27)])
+    assert "RB" not in run_ratios(["RB"] * 4 + ["WR"] * 8, avail)
+    assert run_ratios(["RB"] * 9 + ["WR"] * 3, avail).get("RB", 0) > 1.5
+
+
+def test_depth_can_never_be_promoted_by_scarcity():
+    """Structural guarantee: PENALTY_DEPTH exceeds SCARCITY_CAP.
+
+    A position I've already covered must never outrank its own board slot,
+    no matter how fast its tier is vanishing. Scarcity may promote a needed
+    position -- that is the point -- but never a redundant one.
+    """
+    from draft import PENALTY_DEPTH, SCARCITY_CAP, apply_need_weights, tier_scarcity
+    assert PENALTY_DEPTH > SCARCITY_CAP
+
+    mine = [P("qb", "QB", 1, )] if False else [P("qb", "QB", 1)]
+    needs = roster_needs(mine, SLOTS)
+    avail = [TP("qb2", "QB", 40, 1, 41.0), TP("qb3", "QB", 95, 2, 200.0)]
+    sc = tier_scarcity(avail, horizon=60, picks_made=40, runs={"QB": 2.5})
+    apply_need_weights(avail, needs, SLOTS, sc)
+    for p in avail:
+        if p["need_tag"] == "depth":
+            assert p["adj_rank"] > p["my_rank"], p

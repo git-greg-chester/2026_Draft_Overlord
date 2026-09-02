@@ -27,6 +27,21 @@ SCARCITY_DAMPING = 0.6  # trust in the estimate; 1.0 would take it at face value
 SCARCITY_CAP = 35       # never let scarcity alone leap a player more than this
 DEFAULT_CLIFF = 30      # assumed drop when a position has no next tier left
 
+# Positional runs. P(tier gone) multiplies independent probabilities, which is
+# optimistic exactly when it matters: drafts go in bursts. The league's own
+# history says so -- "7 RBs in round 2 in 2025". When a position is coming off
+# the board faster than the remaining pool implies, stretch its horizon.
+RUN_WINDOW = 12         # picks of history that count as "recent"
+RUN_MIN_PICKS = 6       # below this there's no signal, only noise
+RUN_POOL = 40           # upcoming players that define the natural supply rate
+RUN_MAX_RATIO = 2.5     # cap: never assume more than 2.5x the normal rate
+# Scarce positions have a tiny baseline share, so a single pick would divide
+# by almost nothing and invent a run. Both guards exist to stop that: a real
+# run needs several picks, and the expected count never falls below one.
+RUN_MIN_COUNT = 3       # picks of a position before it counts as a run
+RUN_MIN_EXPECTED = 1.0  # floor on the denominator
+RUN_MIN_RATIO = 1.25    # below this it's ordinary variance, not a run
+
 
 def pick_number(round_num: int, slot: int, team_count: int) -> int:
     """1-indexed overall pick for a snake draft."""
@@ -170,13 +185,43 @@ def horizon_pick(my_slot: int | None, team_count: int, rounds: int,
     return mine[0] if mine else None
 
 
-def tier_scarcity(available: list[dict], horizon: int | None) -> dict:
+def run_ratios(recent_positions: list[str], available: list[dict]) -> dict[str, float]:
+    """How much faster than normal each position is coming off the board.
+
+    Baseline is the position's share of the next `RUN_POOL` players by board
+    rank -- i.e. what a neutral draft would consume. A ratio of 2.0 means the
+    room is taking that position twice as fast as supply implies.
+    """
+    if len(recent_positions) < RUN_MIN_PICKS:
+        return {}
+    window = recent_positions[-RUN_WINDOW:]
+    pool = sorted(available, key=lambda p: p.get("my_rank", 9999))[:RUN_POOL]
+    if not pool:
+        return {}
+
+    out: dict[str, float] = {}
+    for pos in set(window):
+        count = window.count(pos)
+        if count < RUN_MIN_COUNT:
+            continue        # one or two picks is noise, not a run
+        share = sum(1 for p in pool if p["pos"] == pos) / len(pool)
+        expected = max(share * len(window), RUN_MIN_EXPECTED)
+        ratio = count / expected
+        if ratio < RUN_MIN_RATIO:
+            continue        # ordinary variance around the expected rate
+        out[pos] = min(RUN_MAX_RATIO, ratio)
+    return out
+
+
+def tier_scarcity(available: list[dict], horizon: int | None,
+                  picks_made: int = 0, runs: dict[str, float] | None = None) -> dict:
     """Per (position, tier): how likely it empties, and what the drop costs.
 
     Returns {(pos, tier): {"p_gone", "cliff", "bonus", "remaining"}}.
     """
     if horizon is None:
         return {}
+    runs = runs or {}
 
     by_pos: dict[str, list[dict]] = {}
     for p in available:
@@ -191,14 +236,19 @@ def tier_scarcity(available: list[dict], horizon: int | None) -> dict:
             if t is not None:
                 tiers.setdefault(t, []).append(p)
 
+        # A run stretches this position's horizon: if RBs are going twice as
+        # fast as supply implies, the next 20 picks eat 40 picks' worth of RBs.
+        ratio = runs.get(pos, 1.0)
+        eff_horizon = picks_made + (horizon - picks_made) * ratio
+
         ordered = sorted(tiers)
         for i, t in enumerate(ordered):
             members = tiers[t]
             # Every member gone => the tier is gone. Independence is a
-            # simplification; runs on a position make it optimistic.
+            # simplification; the run ratio above is the correction for it.
             p_gone = 1.0
             for m in members:
-                p_gone *= p_taken_by(effective_adp(m), horizon)
+                p_gone *= p_taken_by(effective_adp(m), eff_horizon)
 
             best_now = members[0].get("my_rank", 9999)
             nxt = tiers[ordered[i + 1]][0].get("my_rank") if i + 1 < len(ordered) else None
@@ -206,8 +256,8 @@ def tier_scarcity(available: list[dict], horizon: int | None) -> dict:
             cliff = max(0, cliff)
 
             bonus = min(SCARCITY_CAP, p_gone * cliff * SCARCITY_DAMPING)
-            out[(pos, t)] = {"p_gone": p_gone, "cliff": cliff,
-                             "bonus": bonus, "remaining": len(members)}
+            out[(pos, t)] = {"p_gone": p_gone, "cliff": cliff, "bonus": bonus,
+                             "remaining": len(members), "run": round(ratio, 2)}
     return out
 
 
@@ -268,7 +318,8 @@ def value_targets(available: list[dict], my_next: int | None, limit: int = 8) ->
 
 
 def build_view(board: list[dict], drafted: dict[int, int], my_team_id: int,
-               state, my_slot: int | None) -> dict:
+               state, my_slot: int | None,
+               recent_positions: list[str] | None = None) -> dict:
     """Assemble everything the UI needs in one payload.
 
     drafted maps espn_id -> team_id.
@@ -297,7 +348,8 @@ def build_view(board: list[dict], drafted: dict[int, int], my_team_id: int,
     needs = roster_needs(mine, slot_counts)
     horizon = horizon_pick(my_slot, state.team_count if state else 10,
                            rounds, picks_made)
-    scarcity = tier_scarcity(available, horizon)
+    runs = run_ratios(recent_positions or [], available)
+    scarcity = tier_scarcity(available, horizon, picks_made, runs)
     apply_need_weights(available, needs, slot_counts, scarcity)
     return {
         # Each player carries adj_rank; the client sorts, so the payload
@@ -312,8 +364,18 @@ def build_view(board: list[dict], drafted: dict[int, int], my_team_id: int,
         "cliffs": tier_cliffs(available),
         "targets": value_targets(available, nxt),
         "teams": state.teams if state else {},
+        # Slim rows so search can answer "has he gone yet?" without a lookup.
+        "taken": [{"espn_id": p["espn_id"], "name": p["name"], "pos": p["pos"],
+                   "team": p["team"], "my_rank": p.get("my_rank"),
+                   "by": p.get("drafted_by")} for p in gone],
         "rounds": rounds,
         "horizon": horizon,
+        "runs": [{"pos": p, "ratio": round(r, 2),
+                  "recent": (recent_positions or [])[-RUN_WINDOW:].count(p),
+                  "window": min(RUN_WINDOW, len(recent_positions or []))}
+                 # Show exactly what is being applied -- a hidden adjustment
+                 # is worse than a noisy chip.
+                 for p, r in sorted(runs.items(), key=lambda kv: -kv[1])],
         "scarcity": [
             {"pos": pos, "tier": t, **v}
             for (pos, t), v in sorted(scarcity.items(), key=lambda kv: -kv[1]["bonus"])

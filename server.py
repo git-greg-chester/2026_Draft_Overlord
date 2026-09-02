@@ -20,6 +20,8 @@ from ingest import normalize
 from espn import Config, DraftState, EspnClient, EspnError
 
 HERE = Path(__file__).parent
+STATE_PATH = HERE / "draft_state.json"
+STATE_MAX_AGE = 18 * 3600   # don't resume a state left over from another draft
 POLL_SECONDS = 2.5
 UNKNOWN_TEAM = 0   # manual cross-off where we don't know who took him
 MY_TEAM_MANUAL = -1  # stand-in for "my team" before ESPN settings are known
@@ -92,9 +94,65 @@ class State:
         self.my_slot: int | None = None
         # Set by /api/_replay so a live poll can't overwrite rehearsal data.
         self.replay_mode = False
+        self.resumed: str | None = None
 
     def bump(self):
         self.version += 1
+        self.save()
+
+    # --- crash persistence -------------------------------------------------
+    # Losing `manual` mid-draft is the worst failure mode in the app: the
+    # scraper repopulates who is drafted but not which picks were *mine*, so
+    # needs and weighting would silently reset to an empty roster while
+    # looking entirely normal.
+
+    def snapshot(self) -> dict:
+        return {
+            "saved_at": time.time(),
+            "league_id": self.cfg.league_id if self.cfg else None,
+            "manual": {str(k): v for k, v in self.manual.items()},
+            "scraped": {str(k): v for k, v in self.scraped.items()},
+            "history": self.history,
+            "scrape_order": self.scrape_order,
+            "scrape_prev": self.scrape_prev,
+            "scrape_newest_first": self.scrape_newest_first,
+            "my_slot": self.my_slot,
+        }
+
+    def save(self, path: Path = None) -> None:
+        path = path or STATE_PATH
+        try:
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.snapshot()))
+            tmp.replace(path)          # atomic; a crash mid-write can't corrupt
+        except OSError:
+            pass                        # never let persistence break the draft
+
+    def restore(self, path: Path = None) -> str | None:
+        path = path or STATE_PATH
+        if not path.exists():
+            return None
+        try:
+            d = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return "unreadable state file, ignored"
+        age = time.time() - d.get("saved_at", 0)
+        if age > STATE_MAX_AGE:
+            return f"ignored state {age/3600:.0f}h old"
+        saved_league = d.get("league_id")
+        now_league = self.cfg.league_id if self.cfg else None
+        if saved_league and now_league and saved_league != now_league:
+            return f"ignored state from league {saved_league}"
+        self.manual = {int(k): v for k, v in (d.get("manual") or {}).items()}
+        self.scraped = {int(k): v for k, v in (d.get("scraped") or {}).items()}
+        self.history = list(d.get("history") or [])
+        self.scrape_order = list(d.get("scrape_order") or [])
+        self.scrape_prev = list(d.get("scrape_prev") or [])
+        self.scrape_newest_first = d.get("scrape_newest_first")
+        if d.get("my_slot") is not None:
+            self.my_slot = d["my_slot"]
+        n = len(self.manual) + len(self.scraped)
+        return f"resumed {n} picks from {age/60:.0f}m ago" if n else None
 
     @property
     def my_team_id(self) -> int:
@@ -129,11 +187,22 @@ class State:
             })
         return out
 
+    def recent_positions(self) -> list[str]:
+        """Positions of recent picks, oldest to newest, for run detection.
+
+        Players off our 193-man board have no position here and are skipped;
+        that biases the window slightly but never invents a run.
+        """
+        order = self.api_order or self.scrape_order or list(self.history)
+        return [self.by_id[i]["pos"] for i in order if i in self.by_id]
+
     def view(self) -> dict:
         d = self.drafted()
         team_id = self.my_team_id
-        v = draft.build_view(self.board, d, team_id, self.state, self.my_slot)
+        v = draft.build_view(self.board, d, team_id, self.state, self.my_slot,
+                             self.recent_positions())
         v["recent"] = self.recent()
+        v["resumed"] = self.resumed
         v["connection"] = self.conn
         v["version"] = self.version
         v["league"] = {
@@ -233,9 +302,17 @@ def startup():
     try:
         S.cfg = Config.load()
         S.my_slot = S.cfg.draft_slot
-        threading.Thread(target=poll_loop, daemon=True).start()
+        started = True
     except EspnError as e:
         S.conn = {"status": "manual", "detail": str(e), "at": time.time()}
+        started = False
+
+    resumed = S.restore()
+    if resumed:
+        print(f"[state] {resumed}", flush=True)   # uvicorn buffers stdout
+        S.resumed = resumed
+    if started:
+        threading.Thread(target=poll_loop, daemon=True).start()
 
 
 @app.get("/")

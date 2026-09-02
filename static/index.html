@@ -46,6 +46,11 @@
       border-bottom:1px solid var(--line);overflow-x:auto}
   nav button{white-space:nowrap}
   nav button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  nav input{flex:1;min-width:90px;background:var(--panel2);color:var(--tx);
+            border:1px solid var(--line);border-radius:6px;padding:3px 8px;
+            font-size:12px;outline:none}
+  nav input:focus{border-color:var(--accent)}
+  nav input::placeholder{color:var(--faint)}
 
   .banner{padding:6px 10px;font-size:12px;background:#3d1d1d;color:#ffb4ae;
           border-bottom:1px solid var(--gone)}
@@ -89,6 +94,9 @@
   .tag.depth{color:var(--gone);border-color:#5a2320}
   .tag.sc{color:var(--accent);border-color:#3d2f7a;background:#1a1533}
   .chip.scarce{border-color:var(--accent);color:#c3b5ff}
+  .chip.run{border-color:var(--gone);color:#ffb4ae;background:#2a1615;
+            font-weight:600;animation:pulse 2s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.62}}
   tr.dep td.nm{opacity:.62}
   .wasrank{color:var(--faint);font-size:10px}
 
@@ -134,7 +142,9 @@
 
 <div id="banner"></div>
 
-<nav id="tabs"></nav>
+<nav id="tabs">
+  <input id="q" type="search" placeholder="find a player…" autocomplete="off" spellcheck="false">
+</nav>
 
 <div class="shell">
   <div>
@@ -155,12 +165,15 @@ let lastCount = null, lastChange = Date.now();
 const el = id => document.getElementById(id);
 
 function tabs(){
-  el("tabs").innerHTML = "";
+  const nav = el("tabs"), q = el("q");
+  // Only remove the buttons -- clearing innerHTML would destroy the search
+  // input along with its value and focus on every re-render.
+  [...nav.querySelectorAll("button")].forEach(b=>b.remove());
   POS.forEach(p=>{
     const b=document.createElement("button");
     b.textContent=p; if(p===pos) b.className="on";
     b.onclick=()=>{pos=p;tabs();render(last)};
-    el("tabs").appendChild(b);
+    nav.insertBefore(b, q);
   });
 }
 
@@ -192,10 +205,16 @@ function render(d){
     ? `<div class="banner"><b>${c.status}</b> — ${c.detail} · board still works, cross players off by hand</div>`
     : (c.status==="manual"
         ? `<div class="banner warn">Manual mode — no ESPN config. Click rows to cross players off.</div>`
-        : "");
+        : (d.resumed
+            ? `<div class="banner warn">Recovered after restart — ${d.resumed}. Check your roster looks right.</div>`
+            : ""));
 
   // chips: open slots, then tier cliffs
   const ch=[];
+  // A run in progress is the most time-sensitive thing on screen.
+  (weighted ? (d.runs||[]) : []).slice(0,2).forEach(r => ch.push(
+    `<span class="chip run" title="${r.ratio}x the rate the remaining pool implies">`
+    + `${r.pos} RUN · ${r.recent} of last ${r.window}</span>`));
   // Scarcity leads: probability x cliff is sharper than a raw count, and
   // it's the thing that should change what you do right now.
   const scarce = (weighted ? (d.scarcity||[]) : []).filter(s=>s.bonus>=3);
@@ -232,18 +251,24 @@ function render(d){
   renderFeed(d);
   tickAge();   // paint immediately rather than waiting for the next tick
 
-  const mineView = pos==="MINE";
+  const query = (el("q").value||"").trim().toLowerCase();
+  const hit = p => p.name.toLowerCase().includes(query);
+
+  const mineView = pos==="MINE" && !query;
   let list = mineView ? d.mine
-                      : d.available.filter(p=>pos==="ALL"||p.pos===pos);
+                      : d.available.filter(p=>(query ? hit(p) : (pos==="ALL"||p.pos===pos)));
+  // Searching spans drafted players too, so "has he gone yet?" is answerable.
+  const takenHits = query ? (d.taken||[]).filter(hit).slice(0,12) : [];
   // Weighted order pushes covered positions down without hiding them, so
   // tier bands would fragment; tiers move inline instead.
   const banded = !weighted || mineView;
   if(!mineView && weighted)
     list = list.slice().sort((a,b)=>(a.adj_rank-b.adj_rank)||(a.my_rank-b.my_rank));
   const tb=el("rows"); tb.innerHTML="";
-  if(!list.length){
+  if(!list.length && !takenHits.length){
     tb.innerHTML=`<tr><td class="empty">${
-      mineView?"you haven't drafted anyone yet":"nobody left here"}</td></tr>`;
+      query ? `no one matching “${query}”`
+            : mineView?"you haven't drafted anyone yet":"nobody left here"}</td></tr>`;
     return;
   }
 
@@ -266,6 +291,7 @@ function render(d){
     }
     const tr=tb.insertRow();
     tr.className = "p" + (p.need_tag==="depth" ? " dep" : "");
+    tr.dataset.id = p.espn_id;   // stable across sort modes; badges break text matching
     tr.onclick=e=>{ if(e.target.classList.contains("act")) return;
                     post("/api/pick",{espn_id:p.espn_id,mine:false}); };
 
@@ -295,8 +321,17 @@ function render(d){
     act.onclick=()=>post("/api/pick",{espn_id:p.espn_id,mine:true});
   });
 
-  el("foot").textContent =
-    `${d.available.length} available · ${d.drafted_count} drafted · you have ${d.mine.length}`;
+  takenHits.forEach(p=>{
+    const tr=tb.insertRow(); tr.className="p taken";
+    const rk=tr.insertCell(); rk.className="rk num"; rk.textContent=p.my_rank??"";
+    const nm=tr.insertCell(); nm.className="nm"; nm.colSpan=4;
+    const by = p.by && d.teams && d.teams[p.by] ? ` — ${d.teams[p.by]}` : "";
+    nm.innerHTML=`${p.name}<span class="meta">${p.pos} · ${p.team} · TAKEN${by}</span>`;
+  });
+
+  el("foot").textContent = query
+    ? `${list.length} available · ${takenHits.length} already taken match “${query}”`
+    : `${d.available.length} available · ${d.drafted_count} drafted · you have ${d.mine.length}`;
 }
 
 function renderFeed(d){
@@ -340,6 +375,12 @@ el("mode").onclick=()=>{ weighted=!weighted;
   el("mode").style.borderColor = weighted ? "var(--accent)" : "var(--line)";
   render(last); };
 el("mode").style.borderColor="var(--accent)";
+el("q").addEventListener("input", ()=>render(last));
+el("q").addEventListener("keydown", e=>{ if(e.key==="Escape"){ e.target.value=""; render(last); }});
+// "/" focuses search from anywhere; Esc clears it.
+document.addEventListener("keydown", e=>{
+  if(e.key==="/" && document.activeElement!==el("q")){ e.preventDefault(); el("q").focus(); }
+});
 
 tabs();
 fetch("/api/state").then(r=>r.json()).then(render);
