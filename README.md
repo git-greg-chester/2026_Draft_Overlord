@@ -14,6 +14,57 @@ Runs locally in a browser tab beside the ESPN draft room.
 
 ---
 
+# To do before the draft
+
+Draft is **Friday Sep 4, 8:00pm EDT**.
+
+### Now — do not leave to draft day
+
+- [ ] **Chrome PNA flag.** Open `chrome://flags/#block-insecure-private-network-requests`,
+      set to **Disabled**, relaunch. Without it the direct bridge silently fails
+      and you fall back to the clipboard route. Requires a browser restart, so
+      it is not something to discover at 7:58pm.
+- [ ] **Dry run.** Start the server, open the board, and run
+      `python3 replay.py --simulate --slot 1 --delay 1`. Watch the recent-picks
+      feed fill and the ordering shift. This is the only way to judge whether
+      `SCARCITY_DAMPING` (0.6) and the run thresholds match your instincts —
+      tune them in `draft.py` while there's time.
+- [ ] **Practise the console paste.** Open any ESPN page, paste snippet A, and
+      confirm it runs. Getting comfortable with DevTools now costs nothing.
+
+### Thursday Sep 3
+
+- [ ] **Refresh the rankings:**
+      ```bash
+      python3 ingest.py --overall rankings/2026_Draft_Board_Overall.xlsx \
+        --positional rankings/2026_Draft_Board_Positional.xlsx --refresh
+      ```
+      ESPN re-ranks daily. The legend flags **Love, Jeanty, Jacobs, Conner** as
+      volatile — Jacobs was last seen at ADP 60 against your rank of 113, so the
+      room had not yet priced in the exempt-list news.
+- [ ] **Confirm `unmatched.csv` is empty** after that run. A player who fails to
+      match never gets crossed off.
+- [ ] **Verify cookies still work.** Start the server; the connection dot should
+      be green. If it is red with `auth`, re-run `python3 setup_config.py`.
+      `espn_s2` dies on logout or password change.
+
+### Friday Sep 4, ~7:45pm
+
+- [ ] `python3 -m uvicorn server:app --port 8777`, open the board, tile it.
+- [ ] Paste snippet **A** into the draft room console.
+- [ ] Confirm the console logs `pushed N -> matched N`.
+- [ ] Check the header shows **slot 1** and your first pick as **#1**.
+- [ ] Confirm `MY_TEAM` matches how the room renders your name, by taking a pick
+      and checking it lands in the **MINE** tab.
+
+### After the draft
+
+- [ ] **Rotate your ESPN password.** Your SWID was pasted into a chat, and
+      `espn_s2` is a live session token.
+- [ ] Delete the throwaway league (`1474197942`) if you want it off your account.
+
+---
+
 # Draft night
 
 ```bash
@@ -79,9 +130,8 @@ python3 ingest.py \
   --positional rankings/2026_Draft_Board_Positional.xlsx --refresh
 ```
 
-`--refresh` re-pulls ESPN's ranks and ADP, which move daily. **Run it the day
-before the draft** — the legend flags Love, Jeanty, Jacobs and Conner as
-volatile.
+`--refresh` re-pulls ESPN's ranks and ADP, which move daily. **Run it Thursday
+Sep 3** — the legend flags Love, Jeanty, Jacobs and Conner as volatile.
 
 Writes `board.json`. **`unmatched.csv` must be empty** — an unmatched player
 never gets crossed off, which is worse than no tool at all. Currently 193/193
@@ -142,7 +192,7 @@ Snippets are in **`draft_room_snippets.js`**:
 - **B — clipboard**, no browser settings required. Pair with
   `python3 clipboard_bridge.py`. The draft tab must stay focused.
 - **C — re-discovery**, prints which DOM containers hold your players, in case
-  ESPN changes its markup before Sunday.
+  ESPN changes its markup before Friday.
 
 Console `copy()` does **not** work inside `setInterval` — use
 `navigator.clipboard.writeText`.
