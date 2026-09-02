@@ -206,6 +206,27 @@ def set_slot(s: SlotIn):
         return {"ok": True, "my_slot": S.my_slot}
 
 
+class ReplayIn(BaseModel):
+    """Test-only: stand in for what the poller would have produced."""
+    picks: list[dict]
+    my_team_id: int | None = None
+
+
+@app.post("/api/_replay")
+def replay(r: ReplayIn):
+    with S.lock:
+        S.api = {p["espn_id"]: p["team_id"] for p in r.picks
+                 if p.get("espn_id") and p.get("team_id")}
+        if r.my_team_id is not None:
+            if S.cfg is None:
+                S.cfg = Config(team_id=r.my_team_id)
+            else:
+                S.cfg.team_id = r.my_team_id
+        S.conn = {"status": "live", "detail": f"replay {len(S.api)} picks", "at": time.time()}
+        S.bump()
+        return {"ok": True, "picks": len(S.api)}
+
+
 @app.get("/api/events")
 async def events():
     async def gen():

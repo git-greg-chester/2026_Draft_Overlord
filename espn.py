@@ -6,13 +6,16 @@ Errors are classified so the UI can say something actionable instead of just
 """
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import requests
 
 BASE = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl"
-CONFIG_PATH = Path.home() / ".config" / "draft-overlord" / "config.json"
+CONFIG_PATH = Path(
+    os.environ.get("DRAFT_OVERLORD_CONFIG", Path.home() / ".config" / "draft-overlord" / "config.json")
+)
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
 # ESPN lineup slot ids -> readable. Our league: QB/RB/RB/WR/WR/WR-TE/TE/FLEX/D-ST
