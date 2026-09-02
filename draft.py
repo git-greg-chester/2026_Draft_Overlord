@@ -155,7 +155,7 @@ def build_view(board: list[dict], drafted: dict[int, int], my_team_id: int,
     mine.sort(key=lambda p: p.get("my_rank", 9999))
 
     picks_made = len(drafted)
-    rounds = state.roster_size if state else 16
+    rounds = state.draft_rounds if state else 16
     nxt = next_pick(my_slot, state.team_count, rounds, picks_made) if my_slot else None
 
     for p in available:
@@ -173,4 +173,5 @@ def build_view(board: list[dict], drafted: dict[int, int], my_team_id: int,
         "cliffs": tier_cliffs(available),
         "targets": value_targets(available, nxt),
         "teams": state.teams if state else {},
+        "rounds": rounds,
     }

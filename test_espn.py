@@ -75,6 +75,67 @@ def test_empty_payload_does_not_explode():
     assert st.picks == [] and st.roster_size == 16
 
 
+def test_unfilled_pick_slots_are_not_drafted_players():
+    """ESPN pre-creates all 160 pick slots with playerId -1 before the draft.
+
+    Treating those as real picks would show an empty board on draft night.
+    """
+    skeleton = {
+        "teams": [{"id": i, "name": f"T{i}"} for i in range(1, 11)],
+        "draftDetail": {
+            "drafted": False, "inProgress": False,
+            "picks": [
+                {"overallPickNumber": n, "roundId": (n - 1) // 10 + 1,
+                 "teamId": (n - 1) % 10 + 1, "playerId": -1}
+                for n in range(1, 161)
+            ],
+        },
+    }
+    st = EspnClient.parse(skeleton)
+    assert st.picks == []          # nothing actually drafted
+    assert st.pick_slots == 160    # but the skeleton size is known
+    assert st.draft_rounds == 16   # 160 / 10 teams
+
+
+def test_partially_started_draft():
+    payload = {
+        "teams": [{"id": i, "name": f"T{i}"} for i in range(1, 11)],
+        "draftDetail": {
+            "inProgress": True,
+            "picks": [
+                {"overallPickNumber": 1, "roundId": 1, "teamId": 1, "playerId": 4429795},
+                {"overallPickNumber": 2, "roundId": 1, "teamId": 2, "playerId": 4430807},
+            ] + [
+                {"overallPickNumber": n, "roundId": (n - 1) // 10 + 1,
+                 "teamId": (n - 1) % 10 + 1, "playerId": -1}
+                for n in range(3, 161)
+            ],
+        },
+    }
+    st = EspnClient.parse(payload)
+    assert [p["espn_id"] for p in st.picks] == [4429795, 4430807]
+    assert st.draft_rounds == 16
+
+
+def test_draft_rounds_ignores_ir_slots():
+    """With no pick skeleton to count, fall back to slots minus IR.
+
+    The real league is roster_size 19 (16 drafted + 3 IR) and drafts 16 rounds.
+    """
+    payload = {
+        "settings": {"rosterSettings": {"lineupSlotCounts": {
+            "0": 1, "2": 2, "4": 2, "5": 1, "6": 1, "16": 1,
+            "20": 7, "21": 3, "23": 1,        # slot 21 = IR
+        }}},
+        "teams": [{"id": i, "name": f"T{i}"} for i in range(1, 11)],
+    }
+    st = EspnClient.parse(payload)
+    assert st.roster_size == 19       # ESPN counts IR here
+    assert st.slot_counts["IR"] == 3
+    assert st.pick_slots == 0         # no draft skeleton present
+    assert st.draft_rounds == 16      # 19 - 3 IR
+
+
 def test_slot_from_draft_order():
     from draft import slot_from_draft_order
     order = PAYLOAD["settings"]["draftSettings"]["pickOrder"]

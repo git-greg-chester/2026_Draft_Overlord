@@ -131,7 +131,7 @@ function render(d){
   const c=d.connection||{};
   el("dot").className="dot "+(c.status||"offline");
   const slotSet = d.league && d.league.my_slot != null;
-  const total = (d.league.teams||10)*(d.league.roster_size||16);
+  const total = (d.league.teams||10)*(d.rounds||16);
   el("clock").textContent = d.drafted_count >= total
     ? "Draft complete" : "Pick "+(d.on_the_clock||"—");
   el("until").innerHTML = d.next_pick

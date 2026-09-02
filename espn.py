@@ -66,14 +66,26 @@ class Config:
 
 @dataclass
 class DraftState:
-    picks: list[dict] = field(default_factory=list)   # {overall, round, team_id, espn_id, keeper}
+    picks: list[dict] = field(default_factory=list)   # real picks only; see parse()
     teams: dict[int, str] = field(default_factory=dict)
     slot_counts: dict[str, int] = field(default_factory=dict)
     roster_size: int = 16
+    pick_slots: int = 0      # total pick slots ESPN created (incl. unfilled)
     team_count: int = 10
     draft_order: list[int] = field(default_factory=list)
     in_progress: bool = False
     complete: bool = False
+
+    @property
+    def draft_rounds(self) -> int:
+        """Rounds actually drafted -- not roster_size, which counts IR slots
+        that are never part of the draft."""
+        if self.pick_slots and self.team_count:
+            return self.pick_slots // self.team_count
+        drafted_slots = sum(
+            n for k, n in self.slot_counts.items() if k != "IR"
+        )
+        return drafted_slots or 16
 
 
 class EspnClient:
@@ -133,17 +145,24 @@ class EspnClient:
         draft = d.get("draftDetail") or {}
         st.in_progress = bool(draft.get("inProgress"))
         st.complete = bool(draft.get("drafted"))
-        for p in draft.get("picks") or []:
+        all_picks = draft.get("picks") or []
+        for p in all_picks:
+            pid = p.get("playerId")
+            # ESPN pre-creates every pick slot with playerId -1 and fills them
+            # in live. Anything <= 0 is an empty slot, not a drafted player.
+            if pid is None or pid <= 0:
+                continue
             st.picks.append(
                 {
                     "overall": p.get("overallPickNumber"),
                     "round": p.get("roundId"),
                     "team_id": p.get("teamId"),
-                    "espn_id": p.get("playerId"),
+                    "espn_id": pid,
                     "keeper": bool(p.get("keeper")),
                 }
             )
         st.picks.sort(key=lambda x: x["overall"] or 0)
+        st.pick_slots = len(all_picks)
 
         order = (settings.get("draftSettings") or {}).get("pickOrder") or []
         st.draft_order = list(order)

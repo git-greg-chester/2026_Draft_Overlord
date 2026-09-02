@@ -54,6 +54,8 @@ class State:
         self.state: DraftState = default_state()
         self.cfg: Config | None = None
         self.my_slot: int | None = None
+        # Set by /api/_replay so a live poll can't overwrite rehearsal data.
+        self.replay_mode = False
 
     def bump(self):
         self.version += 1
@@ -97,6 +99,9 @@ def poll_loop():
     backoff = POLL_SECONDS
     while True:
         try:
+            if S.replay_mode:
+                time.sleep(POLL_SECONDS)
+                continue
             client = EspnClient(S.cfg)
             state = client.fetch_draft()
             with S.lock:
@@ -183,9 +188,12 @@ def undo():
 
 @app.post("/api/reset")
 def reset():
+    """Clear manual picks and drop out of replay mode back to live polling."""
     with S.lock:
         S.manual.clear()
         S.history.clear()
+        S.replay_mode = False
+        S.api = {}
         S.bump()
         return {"ok": True}
 
@@ -215,8 +223,9 @@ class ReplayIn(BaseModel):
 @app.post("/api/_replay")
 def replay(r: ReplayIn):
     with S.lock:
+        S.replay_mode = True
         S.api = {p["espn_id"]: p["team_id"] for p in r.picks
-                 if p.get("espn_id") and p.get("team_id")}
+                 if p.get("espn_id") and p.get("team_id") and p["espn_id"] > 0}
         if r.my_team_id is not None:
             if S.cfg is None:
                 S.cfg = Config(team_id=r.my_team_id)

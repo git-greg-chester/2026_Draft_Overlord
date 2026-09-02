@@ -38,13 +38,15 @@ def simulate(board: list[dict], teams: int, rounds: int, seed: int, noise: float
     pool.sort(key=lambda x: x[0])
     queue = [p for _, p in pool]
 
-    picks, fake_id = [], -900000
+    # Off-board players are real ESPN players we simply didn't rank, so they
+    # get positive ids like anything else; <= 0 means "unfilled pick slot".
+    picks, fake_id = [], 9_000_000
     for overall in range(1, teams * rounds + 1):
         rnd = (overall - 1) // teams + 1
         # which slot is on the clock at this overall pick
         slot = next(s for s in range(1, teams + 1) if pick_number(rnd, s, teams) == overall)
         if rng.random() < OFF_BOARD_RATE:
-            fake_id -= 1
+            fake_id += 1
             picks.append({"overall": overall, "round": rnd, "team_id": slot,
                           "espn_id": fake_id, "off_board": True})
             continue
