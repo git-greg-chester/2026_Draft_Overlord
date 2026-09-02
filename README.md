@@ -88,10 +88,24 @@ QBs) — it exists to push picks through the pipeline, not to draft well.
 Once cookies are configured you can replay a real finished draft:
 
 ```bash
-python3 replay.py --from-league 2025 --slot 3
+python3 replay.py --from-league 2025 --slot 1
 ```
 
-Tests: `python3 -m pytest -q` (18 tests).
+## Proving picks arrive live
+
+Replaying a *finished* draft proves we can read picks; it does not prove ESPN
+writes them to the read API *during* a draft. `watch.py` measures that.
+
+```bash
+python3 watch.py --discover        # list leagues, including any mock you joined
+python3 watch.py --league <id>     # timestamp every pick as it lands
+```
+
+Each new pick prints with the gap since the previous one, so a live draft
+should show picks trickling in. If they all appear at once at the end, polling
+is the wrong transport and the fallback is a browser extension.
+
+Tests: `python3 -m pytest -q` (21) and `npm test` (jsdom UI render).
 
 ---
 
