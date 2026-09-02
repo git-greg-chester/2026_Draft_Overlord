@@ -11,10 +11,12 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 import draft
+from ingest import normalize
 from espn import Config, DraftState, EspnClient, EspnError
 
 HERE = Path(__file__).parent
@@ -33,6 +35,33 @@ DEFAULT_ROSTER = 16
 
 app = FastAPI()
 
+# The ESPN draft room posts scraped picks here from its own page context.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://fantasy.espn.com"],
+    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def private_network_access(request, call_next):
+    """Chrome blocks HTTPS pages from reaching 127.0.0.1 unless the preflight
+    explicitly opts in. Without this the draft-room bridge silently fails."""
+    if request.method == "OPTIONS":
+        from starlette.responses import Response
+        origin = request.headers.get("origin", "*")
+        return Response(status_code=200, headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Private-Network": "true",
+            "Access-Control-Max-Age": "600",
+        })
+    resp = await call_next(request)
+    resp.headers["Access-Control-Allow-Private-Network"] = "true"
+    return resp
+
 
 def default_state() -> DraftState:
     st = DraftState()
@@ -48,6 +77,8 @@ class State:
         self.board: list[dict] = []
         self.manual: dict[int, int] = {}     # espn_id -> team_id
         self.api: dict[int, int] = {}
+        self.scraped: dict[int, int] = {}    # pushed from the ESPN draft room
+        self.by_norm: dict[str, dict] = {}   # normalized name -> board row
         self.history: list[int] = []          # manual picks, for undo
         self.version = 0
         self.conn = {"status": "offline", "detail": "polling not started", "at": None}
@@ -65,8 +96,8 @@ class State:
         return self.cfg.team_id if (self.cfg and self.cfg.team_id) else MY_TEAM_MANUAL
 
     def drafted(self) -> dict[int, int]:
-        # API is authoritative; manual fills the gaps.
-        return {**self.manual, **self.api}
+        # API is authoritative when it has anything; scraped beats manual.
+        return {**self.manual, **self.scraped, **self.api}
 
     def view(self) -> dict:
         d = self.drafted()
@@ -116,8 +147,10 @@ def poll_loop():
                 if S.my_slot is None and S.cfg and S.cfg.team_id:
                     S.my_slot = (S.cfg.draft_slot
                                  or draft.slot_from_draft_order(state.draft_order, S.cfg.team_id))
-                new_conn = {"status": "live",
-                            "detail": f"{len(api)} picks", "at": time.time()}
+                # Don't report "0 picks" over a working draft-room bridge.
+                detail = (f"draft room: {len(S.scraped)} picks"
+                          if (not api and S.scraped) else f"{len(api)} picks")
+                new_conn = {"status": "live", "detail": detail, "at": time.time()}
                 if changed or S.conn["status"] != "live":
                     S.conn = new_conn
                     S.bump()
@@ -140,6 +173,7 @@ def poll_loop():
 @app.on_event("startup")
 def startup():
     S.board = load_board()
+    S.by_norm = {normalize(b["name"]): b for b in S.board}
     try:
         S.cfg = Config.load()
         S.my_slot = S.cfg.draft_slot
@@ -212,6 +246,45 @@ def set_slot(s: SlotIn):
         S.my_slot = s.slot
         S.bump()
         return {"ok": True, "my_slot": S.my_slot}
+
+
+@app.get("/api/names")
+def names():
+    """Board names, so a page-side scraper can find them in the DOM."""
+    with S.lock:
+        return {"names": [b["name"] for b in S.board]}
+
+
+class ScrapeIn(BaseModel):
+    """Player names lifted straight out of the ESPN draft room DOM."""
+    names: list[str]
+    mine: list[str] = []
+
+
+@app.post("/api/scrape")
+def scrape(s: ScrapeIn):
+    """Fallback transport for when ESPN's read API doesn't carry live picks.
+
+    Takes names rather than ids because the DOM only has names; they are
+    matched against the board with the same normalization ingest.py used.
+    """
+    with S.lock:
+        mine_norm = {normalize(n) for n in s.mine}
+        found: dict[int, int] = {}
+        unmatched: list[str] = []
+        for raw in s.names:
+            row = S.by_norm.get(normalize(raw))
+            if row is None:
+                unmatched.append(raw)
+                continue
+            found[row["espn_id"]] = (S.my_team_id if normalize(raw) in mine_norm
+                                     else UNKNOWN_TEAM)
+        if found != S.scraped:
+            S.scraped = found
+            S.conn = {"status": "live", "detail": f"draft room: {len(found)} picks",
+                      "at": time.time()}
+            S.bump()
+        return {"ok": True, "matched": len(found), "unmatched": unmatched}
 
 
 class ReplayIn(BaseModel):
