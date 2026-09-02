@@ -91,19 +91,48 @@ Once cookies are configured you can replay a real finished draft:
 python3 replay.py --from-league 2025 --slot 1
 ```
 
-## Proving picks arrive live
+## Do picks arrive live? (partly answered)
 
 Replaying a *finished* draft proves we can read picks; it does not prove ESPN
-writes them to the read API *during* a draft. `watch.py` measures that.
+writes them *during* a draft. `watch.py` measures that.
 
 ```bash
-python3 watch.py --discover        # list leagues, including any mock you joined
+python3 watch.py --discover        # list leagues on the account
 python3 watch.py --league <id>     # timestamp every pick as it lands
 ```
 
-Each new pick prints with the gap since the previous one, so a live draft
-should show picks trickling in. If they all appear at once at the end, polling
-is the wrong transport and the fallback is a browser extension.
+**Tested 2026-09-01 against a live ESPN mock draft:** the room reached 160
+picks while `mDraftDetail`, `mRoster`, `mTeam`, `mMatchup` and
+`mPendingTransactions` all returned zero. On completion the mock league
+**404'd** — ESPN deletes mocks, they are never persisted.
+
+So the mock proves nothing about a real draft. What is known:
+
+- Real league drafts *are* written: 2023, 2024, 2025 all hold full pick data.
+- Whether they are written live or only at completion is **still untested**.
+- To settle it, create a throwaway *real* league (mocks won't do), schedule a
+  draft a few minutes out, let it autodraft, and point `watch.py` at it.
+
+Until then the draft-room bridge below is the transport we trust.
+
+## Draft-room bridge (proven)
+
+Reads picks straight out of the ESPN draft room DOM. Validated on a live
+mock: 160 picks, 100% name match, no virtualization of the pick list.
+
+Selector: `[class*="pick__message"] .playerinfo__playername`
+
+Direct POST is blocked by Chrome's Private Network Access (HTTPS page ->
+127.0.0.1), so either:
+
+- set `chrome://flags/#block-insecure-private-network-requests` to
+  **Disabled** and use the direct-fetch snippet, or
+- run `python3 clipboard_bridge.py` and use the clipboard snippet, which no
+  browser policy blocks. The draft tab must stay focused.
+
+Both snippets live in the console; see git history for the exact text.
+`copy()` does not work inside `setInterval` -- use
+`navigator.clipboard.writeText`.
 
 Tests: `python3 -m pytest -q` (21) and `npm test` (jsdom UI render).
 
