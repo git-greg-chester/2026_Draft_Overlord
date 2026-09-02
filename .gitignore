@@ -17,3 +17,7 @@ venv/
 
 # macOS
 .DS_Store
+
+# Node (UI test harness only)
+node_modules/
+package-lock.json

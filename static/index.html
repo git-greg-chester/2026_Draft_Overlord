@@ -103,7 +103,7 @@
 <footer id="foot">Click a row to cross a player off. Click <b>+</b> to add him to your roster.</footer>
 
 <script>
-const POS = ["ALL","RB","WR","TE","QB","DST"];
+const POS = ["ALL","RB","WR","TE","QB","DST","MINE"];
 let pos = "ALL", last = null;
 
 const el = id => document.getElementById(id);
@@ -130,10 +130,15 @@ function render(d){
   // connection + clock
   const c=d.connection||{};
   el("dot").className="dot "+(c.status||"offline");
-  el("clock").textContent = "Pick "+(d.on_the_clock||"—");
+  const slotSet = d.league && d.league.my_slot != null;
+  const total = (d.league.teams||10)*(d.league.roster_size||16);
+  el("clock").textContent = d.drafted_count >= total
+    ? "Draft complete" : "Pick "+(d.on_the_clock||"—");
   el("until").innerHTML = d.next_pick
     ? `· yours <b>#${d.next_pick}</b> · <b>${d.picks_until}</b> away`
-    : `· <span style="color:var(--faint)">draft slot unknown</span>`;
+    : (slotSet
+        ? `· <span style="color:var(--faint)">no picks left</span>`
+        : `· <span style="color:var(--coin)">set your slot →</span>`);
 
   // banner for connection trouble
   const bad = ["auth","notfound","network","error","http"].includes(c.status);
@@ -149,6 +154,12 @@ function render(d){
   Object.entries(open).forEach(([s,n])=>ch.push(`<span class="chip need">need ${s}${n>1?" ×"+n:""}</span>`));
   (d.cliffs||[]).filter(x=>x.cliff).forEach(x=>
     ch.push(`<span class="chip cliff">${x.pos} T${x.tier}: ${x.remaining} left</span>`));
+  // Bye stacking: wk14 is the last week before playoffs, wk11 has six teams out.
+  const byes={};
+  (d.mine||[]).forEach(p=>{ if(p.bye) byes[p.bye]=(byes[p.bye]||0)+1; });
+  Object.entries(byes).filter(([,n])=>n>=3).forEach(([wk,n])=>
+    ch.push(`<span class="chip cliff">bye wk${wk}: ${n} players</span>`));
+
   const cnt=(d.needs&&d.needs.counts)||{};
   const have=Object.entries(cnt).map(([p,n])=>`${p}${n}`).join(" ");
   if(have) ch.push(`<span class="chip have">roster: ${have}</span>`);
@@ -156,12 +167,26 @@ function render(d){
 
   buildSlots((d.league&&d.league.teams)||10, d.league&&d.league.my_slot);
 
-  const list = d.available.filter(p=>pos==="ALL"||p.pos===pos);
+  const mineView = pos==="MINE";
+  const list = mineView ? d.mine
+                        : d.available.filter(p=>pos==="ALL"||p.pos===pos);
   const tb=el("rows"); tb.innerHTML="";
-  if(!list.length){ tb.innerHTML=`<tr><td class="empty">nobody left here</td></tr>`; return; }
+  if(!list.length){
+    tb.innerHTML=`<tr><td class="empty">${
+      mineView?"you haven't drafted anyone yet":"nobody left here"}</td></tr>`;
+    return;
+  }
 
   let tier=null;
   list.forEach(p=>{
+    if(mineView){
+      const tr=tb.insertRow(); tr.className="p mine";
+      const rk=tr.insertCell(); rk.className="rk num"; rk.textContent=p.my_rank;
+      const nm=tr.insertCell(); nm.className="nm"; nm.colSpan=4;
+      nm.innerHTML=`${p.name}<span class="meta">${p.pos} · ${p.team}`
+        +(p.bye?` · bye ${p.bye}`:``)+` · tier ${p.tier}</span>`;
+      return;
+    }
     const t = pos==="ALL" ? p.tier : p.pos_tier;
     const tn = pos==="ALL" ? p.tier_name : p.pos_tier_name;
     if(t!==tier){

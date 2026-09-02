@@ -1,0 +1,11 @@
+{
+  "name": "draft-overlord-ui-tests",
+  "private": true,
+  "description": "jsdom harness for static/index.html (headless Chrome hangs on this machine)",
+  "scripts": {
+    "test": "node test_ui.js static/index.html fixtures/state_midraft.json"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.0"
+  }
+}
