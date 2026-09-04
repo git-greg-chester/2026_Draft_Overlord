@@ -76,6 +76,12 @@ setTimeout(() => {
   console.log('feed entries     :', feed.length, '| mine:', d.querySelectorAll('.fp.me').length);
   console.log('age label        :', JSON.stringify(d.getElementById('age').textContent));
 
+  // My team -- roster rows below the feed, one per drafted-mine player, no dupes.
+  const myTeamRows = d.querySelectorAll('#myteam .mp');
+  const myTeamIds = [...new Set([...myTeamRows].map(r => r.querySelector('.n').textContent))];
+  console.log('my team rows     :', myTeamRows.length, '| unique names:', myTeamIds.length,
+              '| state.mine:', state.mine.length);
+
   // Need weighting: default is weighted, which drops tier bands on purpose
   // and pushes covered positions down without removing them.
   const tagged = [...d.querySelectorAll('.tag')].map(t => t.textContent);
@@ -128,6 +134,7 @@ setTimeout(() => {
     && demoted
     && feed.length > 0
     && scarceBadges > 0 && scarceChips > 0 && scarceInBoard === 0
+    && myTeamRows.length === state.mine.length && myTeamIds.length === myTeamRows.length
     && errors.length === 0;
   console.log(ok ? '\nPASS' : '\nFAIL');
   process.exit(ok ? 0 : 1);

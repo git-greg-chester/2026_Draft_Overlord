@@ -119,6 +119,13 @@
   .fp .pk{color:var(--faint);font-variant-numeric:tabular-nums;
           display:inline-block;min-width:26px}
   @keyframes flash{from{background:#243447}to{background:transparent}}
+  h3.myteam{margin-top:14px}
+  .mp{padding:4px 9px;border-bottom:1px solid #1b2027;font-size:11px;
+      animation:flash .9s ease-out}
+  .mp .n{display:block;color:var(--tx)}
+  .mp .m{color:var(--faint);font-size:10px}
+  .mp .rk{color:var(--faint);font-variant-numeric:tabular-nums;
+          display:inline-block;min-width:26px}
   @media (max-width:700px){
     .shell{grid-template-columns:1fr}
     .feed{position:static;min-height:0;border-left:0;
@@ -154,6 +161,8 @@
   <aside class="feed">
     <h3>Recent picks <span class="age" id="age"></span></h3>
     <div id="feed"></div>
+    <h3 class="myteam">My team <span id="myteamCount"></span></h3>
+    <div id="myteam"></div>
   </aside>
 </div>
 
@@ -249,6 +258,7 @@ function render(d){
   // freshness: measured from when the pick count last moved, not from polls
   if(d.drafted_count !== lastCount){ lastCount = d.drafted_count; lastChange = Date.now(); }
   renderFeed(d);
+  renderMyTeam(d);
   tickAge();   // paint immediately rather than waiting for the next tick
 
   const query = (el("q").value||"").trim().toLowerCase();
@@ -346,6 +356,20 @@ function renderFeed(d){
     `<div class="fp${x.mine?" me":""}">
        <span class="n"><span class="pk">${x.pick}</span>${x.name}</span>
        <span class="m">${x.pos} · ${x.team}${x.by?" · "+x.by:""}</span>
+     </div>`).join("");
+}
+
+function renderMyTeam(d){
+  const box = el("myteam"), mine = (d.mine || []).slice().sort((a,b)=>a.my_rank-b.my_rank);
+  el("myteamCount").textContent = mine.length ? `(${mine.length})` : "";
+  if(!mine.length){ box.innerHTML = `<div class="mp"><span class="m">you haven't drafted anyone yet</span></div>`; box.dataset.sig=""; return; }
+  const sig = mine.map(p=>p.espn_id).join("|");
+  if(box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  box.innerHTML = mine.map(p =>
+    `<div class="mp">
+       <span class="n"><span class="rk">${p.my_rank}</span>${p.name}</span>
+       <span class="m">${p.pos} · ${p.team}${p.bye?` · bye ${p.bye}`:``} · tier ${p.tier}</span>
      </div>`).join("");
 }
 

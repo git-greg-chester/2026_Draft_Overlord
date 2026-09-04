@@ -11,6 +11,7 @@ def setup_function():
         {"espn_id": 3, "name": "Delta", "pos": "TE", "team": "LV", "my_rank": 3},
     ]
     server.S.by_id = {b["espn_id"]: b for b in server.S.board}
+    server.S.by_norm = {server.normalize(b["name"]): b for b in server.S.board}
 
 
 def test_detects_oldest_first_list():
@@ -75,6 +76,27 @@ def test_recent_ignores_players_off_the_board():
     S.api = {1: 5, 999: 5, 2: 5}
     names = [x["name"] for x in S.recent()]
     assert names == ["Bravo", "Alpha"]
+
+
+def test_scrape_dedupes_a_name_seen_twice_in_one_poll():
+    """ESPN's draft room renders each pick in two places at once (a "recently
+    drafted" ticker plus the full pick log), both matching our selector, so
+    one scrape can carry the same name twice. found{} absorbed that silently
+    (it's keyed by espn_id) but scrape_order didn't -- every pick doubled up
+    in the recent-picks feed. A player is only ever drafted once."""
+    S = server.S
+    r = server.scrape(server.ScrapeIn(names=["Alpha", "Alpha", "Bravo", "Bravo"]))
+    assert r["matched"] == 2
+    assert S.scrape_order == [1, 2]
+    assert [x["name"] for x in S.recent()] == ["Bravo", "Alpha"]
+
+
+def test_scrape_dedup_is_case_and_space_insensitive():
+    """Dedup runs on the normalized name, same as the board match itself."""
+    S = server.S
+    r = server.scrape(server.ScrapeIn(names=["alpha", "Alpha ", "Bravo"]))
+    assert r["matched"] == 2
+    assert S.scrape_order == [1, 2]
 
 
 # --- crash persistence ----------------------------------------------------

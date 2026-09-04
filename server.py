@@ -406,12 +406,24 @@ def scrape(s: ScrapeIn):
         found: dict[int, int] = {}
         unmatched: list[str] = []
         ordered: list[int] = []
+        # ESPN's draft room often renders the same pick in two places at once
+        # (a "recently drafted" ticker plus the full pick log), both matching
+        # our selector -- so the same name can appear twice in one scrape.
+        # found{} is a dict and absorbs that silently, but ordered/scrape_order
+        # feed the recent-picks feed directly, so an un-deduped name here
+        # doubled every entry in it. A player is only ever drafted once, so
+        # collapsing to each name's first sighting is always correct.
+        seen: set[str] = set()
         for raw in s.names:
-            row = S.by_norm.get(normalize(raw))
+            norm = normalize(raw)
+            if norm in seen:
+                continue
+            seen.add(norm)
+            row = S.by_norm.get(norm)
             if row is None:
                 unmatched.append(raw)
                 continue
-            found[row["espn_id"]] = (S.my_team_id if normalize(raw) in mine_norm
+            found[row["espn_id"]] = (S.my_team_id if norm in mine_norm
                                      else UNKNOWN_TEAM)
             ordered.append(row["espn_id"])
 
